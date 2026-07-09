@@ -25,7 +25,7 @@
 請同事在 PowerShell 裡執行這一行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/install.ps1' | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ((iwr -UseBasicParsing 'http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/bootstrap.ps1').Content)"
 ```
 
 這會自動完成：
@@ -40,13 +40,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'http://tfyhfc01:300
 如果只想安裝工具與 hooks，不想初始化目前專案：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/install.ps1'))) -NoProjectInit"
+$env:ACM_NO_PROJECT_INIT="1"; powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ((iwr -UseBasicParsing 'http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/bootstrap.ps1').Content)"; Remove-Item Env:ACM_NO_PROJECT_INIT
 ```
 
 如果要明確指定專案：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/install.ps1'))) -ProjectDir 'D:\your-project'"
+$env:ACM_PROJECT_DIR="D:\your-project"; powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ((iwr -UseBasicParsing 'http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/bootstrap.ps1').Content)"; Remove-Item Env:ACM_PROJECT_DIR
 ```
 
 ## 手動安裝
@@ -179,6 +179,7 @@ skills/context-memory/       Codex skill 指令
 templates/.context-memory/   可提交的專案範本
 tests/                       Protocol smoke tests
 context-memory.ps1           CLI
+bootstrap.ps1                一行安裝入口
 install.ps1                  一鍵安裝器
 context-memory-hook.ps1      Hook 入口
 context-memory-core.ps1      Protocol core
