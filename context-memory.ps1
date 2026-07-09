@@ -39,6 +39,7 @@ Commands:
   install claude    Install Claude Code hooks
   install codex     Install Codex hooks
   install all       Install Claude Code and Codex hooks
+  uninstall all      Remove Claude Code and Codex context-memory hooks
   doctor            Check local setup and hook health
   status            Show current memory status
   validate          Validate memory files and state size
@@ -121,7 +122,7 @@ function Test-ContextMemoryHook($Hook) {
   if ($Hook.args) {
     $argsText = (@($Hook.args) -join " ")
   }
-  return ($command -like "*context-memory-hook.ps1*" -or $argsText -like "*context-memory-hook.ps1*")
+  return ($command -like "*context-memory-hook*" -or $argsText -like "*context-memory-hook*")
 }
 
 function Set-HookEvent($HooksObj, [string]$EventName, [string]$Matcher, $HookDef) {
@@ -163,6 +164,34 @@ function Set-HookEvent($HooksObj, [string]$EventName, [string]$Matcher, $HookDef
   }
 
   Set-JsonProperty $HooksObj $EventName $newGroups
+}
+
+function Remove-HookEvent($HooksObj, [string]$EventName) {
+  if (-not $HooksObj.PSObject.Properties[$EventName]) {
+    return 0
+  }
+
+  $groups = @($HooksObj.$EventName)
+  $newGroups = @()
+  $removed = 0
+
+  foreach ($group in $groups) {
+    if (-not $group) {
+      continue
+    }
+
+    $existingHooks = @($group.hooks)
+    $keptHooks = @($existingHooks | Where-Object { -not (Test-ContextMemoryHook $_) })
+    $removed += [Math]::Max(0, $existingHooks.Count - $keptHooks.Count)
+
+    if ($keptHooks.Count -gt 0) {
+      Set-JsonProperty $group "hooks" $keptHooks
+      $newGroups += $group
+    }
+  }
+
+  Set-JsonProperty $HooksObj $EventName $newGroups
+  return $removed
 }
 
 function New-ClaudeHookDef {
@@ -349,6 +378,76 @@ function Invoke-InstallCommandFor([string]$TargetName) {
     }
     default {
       throw "Unknown install target: $TargetName. Use claude, codex, or all."
+    }
+  }
+}
+
+function Invoke-UninstallCommand {
+  $targetName = $Target.ToLowerInvariant()
+  if ($targetName -eq "" -or $targetName -eq "all") {
+    Invoke-UninstallCommandFor "claude"
+    Invoke-UninstallCommandFor "codex"
+    return
+  }
+  Invoke-UninstallCommandFor $targetName
+}
+
+function Invoke-UninstallCommandFor([string]$TargetName) {
+  $events = @("UserPromptSubmit", "SessionStart", "SubagentStart", "PostCompact")
+  switch ($TargetName) {
+    "claude" {
+      $settingsPath = Join-Path $env:USERPROFILE ".claude\settings.json"
+      if (-not (Test-Path -LiteralPath $settingsPath)) {
+        Write-Output "Claude Code settings not found; nothing to uninstall: $settingsPath"
+        return
+      }
+
+      $settings = Read-JsonObject $settingsPath
+      if (-not $settings.PSObject.Properties["hooks"]) {
+        Write-Output "Claude Code hooks not found; nothing to uninstall: $settingsPath"
+        return
+      }
+
+      $removed = 0
+      foreach ($event in $events) {
+        $removed += Remove-HookEvent $settings.hooks $event
+      }
+
+      if ($removed -gt 0) {
+        Write-JsonObject $settingsPath $settings
+        Write-Output "Removed $removed Claude Code context-memory hook(s) from $settingsPath"
+        Write-Output "ENABLE_PROMPT_CACHING_1H was left unchanged."
+      } else {
+        Write-Output "No Claude Code context-memory hooks found in $settingsPath"
+      }
+    }
+    "codex" {
+      $settingsPath = Join-Path $env:USERPROFILE ".codex\hooks.json"
+      if (-not (Test-Path -LiteralPath $settingsPath)) {
+        Write-Output "Codex hooks file not found; nothing to uninstall: $settingsPath"
+        return
+      }
+
+      $settings = Read-JsonObject $settingsPath
+      if (-not $settings.PSObject.Properties["hooks"]) {
+        Write-Output "Codex hooks not found; nothing to uninstall: $settingsPath"
+        return
+      }
+
+      $removed = 0
+      foreach ($event in $events) {
+        $removed += Remove-HookEvent $settings.hooks $event
+      }
+
+      if ($removed -gt 0) {
+        Write-JsonObject $settingsPath $settings
+        Write-Output "Removed $removed Codex context-memory hook(s) from $settingsPath"
+      } else {
+        Write-Output "No Codex context-memory hooks found in $settingsPath"
+      }
+    }
+    default {
+      throw "Unknown uninstall target: $TargetName. Use claude, codex, or all."
     }
   }
 }
@@ -633,6 +732,7 @@ Commands:
   install claude    Install Claude Code hooks
   install codex     Install Codex hooks
   install all       Install Claude Code and Codex hooks
+  uninstall all      Remove Claude Code and Codex context-memory hooks
   doctor            Check local setup and hook health
   status            Show current memory status
   validate          Validate memory files and state size
@@ -651,6 +751,8 @@ Options:
 switch ($Command.ToLowerInvariant()) {
   "init" { Invoke-InitCommand }
   "install" { Invoke-InstallCommand }
+  "uninstall" { Invoke-UninstallCommand }
+  "remove" { Invoke-UninstallCommand }
   "doctor" { Invoke-DoctorCommand }
   "status" { Invoke-StatusCommand }
   "validate" { Invoke-ValidateCommand }

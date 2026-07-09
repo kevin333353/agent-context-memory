@@ -134,6 +134,35 @@ context-memory doctor -Cwd <repo-root>
 
 Windows 上 Claude Code hook 會使用 exec-form `command` + `args`，直接呼叫 Windows PowerShell，避免被 Git Bash/MSYS 包一層後出現 `add_item errno 1`。
 
+## 停用 / 移除
+
+如果後續不想再讓 Claude Code / Codex 注入 context memory，先移除 hooks：
+
+```powershell
+context-memory uninstall all
+```
+
+也可以只移除單一 agent：
+
+```powershell
+context-memory uninstall claude
+context-memory uninstall codex
+```
+
+這個指令只會移除 `.claude/settings.json` 與 `.codex/hooks.json` 裡的 context-memory hooks，不會刪除專案內的 `.context-memory/`，也不會刪除全域工具目錄。這樣可以保留既有記憶、history 與 handoff，之後要重新啟用只要再執行：
+
+```powershell
+context-memory install all
+```
+
+若要完整清掉本機工具，可在移除 hooks 後手動刪除：
+
+```powershell
+Remove-Item -Recurse -Force "$env:USERPROFILE\.agent-context-memory"
+```
+
+若某個專案也不再需要記憶檔，再由專案 owner 決定是否移除該 repo 的 `.context-memory/` 與 `.gitignore` 中的 context-memory 規則。
+
 ## 開新 Session 怎麼接續
 
 同一個專案開新聊天時：
@@ -248,6 +277,7 @@ Schema: .context-memory/schema.yaml
 context-memory init -Cwd <repo-root> -UpdateGitignore
 context-memory install claude
 context-memory install codex
+context-memory uninstall all
 context-memory doctor -Cwd <repo-root>
 context-memory validate -Cwd <repo-root>
 context-memory status -Cwd <repo-root>

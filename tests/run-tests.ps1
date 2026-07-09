@@ -106,6 +106,30 @@ try {
   Assert-True ($codexJson.hookSpecificOutput.hookEventName -eq "UserPromptSubmit") "codex-cli wrong hook event"
   Assert-True ($codexJson.hookSpecificOutput.additionalContext.Contains("<CONTEXT_MEMORY_STATE")) "codex-cli missing additionalContext"
 
+  $oldUserProfile = $env:USERPROFILE
+  try {
+    $env:USERPROFILE = $TempRoot
+    $installHooks = Invoke-Cli "install" "all"
+    Assert-True ($installHooks.ExitCode -eq 0) "cli install all exited $($installHooks.ExitCode): $($installHooks.Stdout)"
+    $claudeSettingsPath = Join-Path $TempRoot ".claude\settings.json"
+    $codexHooksPath = Join-Path $TempRoot ".codex\hooks.json"
+    Assert-True (Test-Path -LiteralPath $claudeSettingsPath) "claude settings were not written"
+    Assert-True (Test-Path -LiteralPath $codexHooksPath) "codex hooks were not written"
+    $claudeSettingsText = Get-Content -Raw -Encoding UTF8 -LiteralPath $claudeSettingsPath
+    $codexHooksText = Get-Content -Raw -Encoding UTF8 -LiteralPath $codexHooksPath
+    Assert-True ($claudeSettingsText.Contains("context-memory-hook.ps1")) "claude hook did not reference context-memory"
+    Assert-True ($codexHooksText.Contains("context-memory-hook.ps1")) "codex hook did not reference context-memory"
+
+    $uninstallHooks = Invoke-Cli "uninstall" "all"
+    Assert-True ($uninstallHooks.ExitCode -eq 0) "cli uninstall all exited $($uninstallHooks.ExitCode): $($uninstallHooks.Stdout)"
+    $claudeSettingsText = Get-Content -Raw -Encoding UTF8 -LiteralPath $claudeSettingsPath
+    $codexHooksText = Get-Content -Raw -Encoding UTF8 -LiteralPath $codexHooksPath
+    Assert-True (-not $claudeSettingsText.Contains("context-memory-hook")) "claude uninstall left context-memory hook"
+    Assert-True (-not $codexHooksText.Contains("context-memory-hook")) "codex uninstall left context-memory hook"
+  } finally {
+    $env:USERPROFILE = $oldUserProfile
+  }
+
   $compactPayload = @{ cwd = $TempRoot; hook_event_name = "PostCompact"; compact_summary = "summary text" } | ConvertTo-Json -Compress
   $compact = Invoke-Hook $compactPayload @("-Adapter", "generic-json")
   Assert-True ($compact.ExitCode -eq 0) "post compact exited $($compact.ExitCode): $($compact.Stderr)"
