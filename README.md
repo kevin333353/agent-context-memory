@@ -20,7 +20,36 @@
 - 把 hook 事件寫進 `.context-memory/events.sqlite`，方便之後用背景 worker 整理記憶表。
 - 提供 synthetic benchmark 與 Claude Code transcript usage report，量測 token savings。
 
-## 安裝
+## 一行安裝
+
+請同事在 PowerShell 裡執行這一行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm 'http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/install.ps1' | iex"
+```
+
+這會自動完成：
+
+- clone/update 到 `%USERPROFILE%\.agent-context-memory`
+- 把工具目錄加入使用者 `PATH`
+- 安裝 Claude Code hooks
+- 安裝 Codex hooks
+- 如果目前 terminal 位於某個 git repo 內，會順便初始化該 repo 的 `.context-memory/`
+- 若有初始化專案，最後執行 `validate` / `doctor` 做檢查
+
+如果只想安裝工具與 hooks，不想初始化目前專案：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/install.ps1'))) -NoProjectInit"
+```
+
+如果要明確指定專案：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/install.ps1'))) -ProjectDir 'D:\your-project'"
+```
+
+## 手動安裝
 
 建議在 Windows 上 clone 到這個位置：
 
@@ -150,6 +179,7 @@ skills/context-memory/       Codex skill 指令
 templates/.context-memory/   可提交的專案範本
 tests/                       Protocol smoke tests
 context-memory.ps1           CLI
+install.ps1                  一鍵安裝器
 context-memory-hook.ps1      Hook 入口
 context-memory-core.ps1      Protocol core
 protocol.md                  context-memory/v1 contract
