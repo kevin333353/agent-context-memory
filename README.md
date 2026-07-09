@@ -25,8 +25,10 @@
 請同事在 PowerShell 裡執行這一行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ((iwr -UseBasicParsing 'http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/bootstrap.ps1').Content)"
+$p="$env:TEMP\agent-context-memory-bootstrap.ps1"; iwr -UseBasicParsing "http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/bootstrap.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p
 ```
+
+這條命令會先把 bootstrap 下載到暫存檔，再用 `-File` 執行；不要用 `iex` 直接執行遠端內容，Windows PowerShell 對 `param(...)`、UTF-8 BOM、中文輸出會比較容易踩到邊界問題。
 
 這會自動完成：
 
@@ -40,13 +42,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ((iwr -UseBasicParsi
 如果只想安裝工具與 hooks，不想初始化目前專案：
 
 ```powershell
-$env:ACM_NO_PROJECT_INIT="1"; powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ((iwr -UseBasicParsing 'http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/bootstrap.ps1').Content)"; Remove-Item Env:ACM_NO_PROJECT_INIT
+$env:ACM_NO_PROJECT_INIT="1"; $p="$env:TEMP\agent-context-memory-bootstrap.ps1"; iwr -UseBasicParsing "http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/bootstrap.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p; Remove-Item Env:ACM_NO_PROJECT_INIT
 ```
 
 如果要明確指定專案：
 
 ```powershell
-$env:ACM_PROJECT_DIR="D:\your-project"; powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ((iwr -UseBasicParsing 'http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/bootstrap.ps1').Content)"; Remove-Item Env:ACM_PROJECT_DIR
+$env:ACM_PROJECT_DIR="D:\your-project"; $p="$env:TEMP\agent-context-memory-bootstrap.ps1"; iwr -UseBasicParsing "http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/bootstrap.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p; Remove-Item Env:ACM_PROJECT_DIR
 ```
 
 ## 手動安裝
