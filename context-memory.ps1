@@ -213,9 +213,10 @@ function New-ClaudeHookDef {
 
 function New-CodexHookDef {
   $hookPath = (Join-Path $ToolRoot "context-memory-hook.ps1").Replace("\", "/")
+  $powerShellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
   return [pscustomobject][ordered]@{
     type = "command"
-    command = "powershell -NoProfile -ExecutionPolicy Bypass -File $hookPath -Adapter codex-cli"
+    command = "`"$powerShellPath`" -NoProfile -ExecutionPolicy Bypass -File `"$hookPath`" -Adapter codex-cli"
   }
 }
 
@@ -643,6 +644,53 @@ function Invoke-DoctorCommand {
       }
     } catch {
       Write-Check "fail" "Hook smoke test failed: $($_.Exception.Message)"
+      $failures++
+    }
+
+    $sessionPayload = @{ cwd = $projectRoot; hook_event_name = "SessionStart"; source = "startup" } | ConvertTo-Json -Compress
+    try {
+      $sessionOut = $sessionPayload | & powershell -NoProfile -ExecutionPolicy Bypass -File $hookPath -Adapter claude-code 2>&1 | Out-String
+      try {
+        $sessionJson = $sessionOut | ConvertFrom-Json
+        if ($sessionJson.hookSpecificOutput -and $sessionJson.hookSpecificOutput.hookEventName -eq "SessionStart" -and [string]$sessionJson.hookSpecificOutput.additionalContext -like "*<CONTEXT_MEMORY_STATE*") {
+          Write-Check "pass" "Claude Code SessionStart smoke test injects context"
+        } else {
+          Write-Check "fail" "Claude Code SessionStart smoke test did not inject context: $sessionOut"
+          $failures++
+        }
+      } catch {
+        if ($sessionOut -like "*SessionStart*" -and ($sessionOut -like "*<CONTEXT_MEMORY_STATE*" -or $sessionOut -like "*\u003cCONTEXT_MEMORY_STATE*")) {
+          Write-Check "pass" "Claude Code SessionStart smoke test injects context"
+        } else {
+          Write-Check "fail" "Claude Code SessionStart smoke test did not inject context: $sessionOut"
+          $failures++
+        }
+      }
+    } catch {
+      Write-Check "fail" "Claude Code SessionStart smoke test failed: $($_.Exception.Message)"
+      $failures++
+    }
+
+    try {
+      $codexSessionOut = $sessionPayload | & powershell -NoProfile -ExecutionPolicy Bypass -File $hookPath -Adapter codex-cli 2>&1 | Out-String
+      try {
+        $codexSessionJson = $codexSessionOut | ConvertFrom-Json
+        if ($codexSessionJson.hookSpecificOutput -and $codexSessionJson.hookSpecificOutput.hookEventName -eq "SessionStart" -and [string]$codexSessionJson.hookSpecificOutput.additionalContext -like "*<CONTEXT_MEMORY_STATE*") {
+          Write-Check "pass" "Codex SessionStart smoke test injects context"
+        } else {
+          Write-Check "fail" "Codex SessionStart smoke test did not inject context: $codexSessionOut"
+          $failures++
+        }
+      } catch {
+        if ($codexSessionOut -like "*SessionStart*" -and ($codexSessionOut -like "*<CONTEXT_MEMORY_STATE*" -or $codexSessionOut -like "*\u003cCONTEXT_MEMORY_STATE*")) {
+          Write-Check "pass" "Codex SessionStart smoke test injects context"
+        } else {
+          Write-Check "fail" "Codex SessionStart smoke test did not inject context: $codexSessionOut"
+          $failures++
+        }
+      }
+    } catch {
+      Write-Check "fail" "Codex SessionStart smoke test failed: $($_.Exception.Message)"
       $failures++
     }
   }

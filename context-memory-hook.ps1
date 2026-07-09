@@ -1,7 +1,6 @@
 param(
   [ValidateSet("auto", "init", "inject", "post-compact")]
   [string]$Mode = "auto",
-  [ValidateSet("auto", "generic-json", "plain-text", "claude-code", "codex-cli")]
   [string]$Adapter = "auto"
 )
 
@@ -19,9 +18,18 @@ if ($Adapter -eq "auto") {
 
 $adapterPath = Join-Path $Root ("adapters\" + $Adapter + ".ps1")
 if (-not (Test-Path -LiteralPath $adapterPath)) {
-  Write-Error "Unknown context-memory adapter: $Adapter"
-  exit 1
+  exit 0
 }
 
-& $adapterPath -Mode $Mode -InputRaw $InputRaw
-exit $LASTEXITCODE
+try {
+  $errPath = Join-Path $env:TEMP ("context-memory-hook-" + [Guid]::NewGuid().ToString("N") + ".err")
+  & $adapterPath -Mode $Mode -InputRaw $InputRaw 2>$errPath
+} catch {
+  # Hooks should fail open. Use `context-memory doctor` for visible diagnostics.
+} finally {
+  if ($errPath -and (Test-Path -LiteralPath $errPath)) {
+    Remove-Item -LiteralPath $errPath -Force -ErrorAction SilentlyContinue
+  }
+}
+
+exit 0

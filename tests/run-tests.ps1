@@ -100,11 +100,28 @@ try {
   Assert-True ($claudeJson.hookSpecificOutput.hookEventName -eq "UserPromptSubmit") "claude-code wrong hook event"
   Assert-True ($claudeJson.hookSpecificOutput.additionalContext.Contains("<CONTEXT_MEMORY_STATE")) "claude-code missing additionalContext"
 
+  $sessionPayload = @{ cwd = $TempRoot; hook_event_name = "SessionStart"; source = "startup" } | ConvertTo-Json -Compress
+  $claudeSession = Invoke-Hook $sessionPayload @("-Adapter", "claude-code")
+  Assert-True ($claudeSession.ExitCode -eq 0) "claude-code SessionStart exited $($claudeSession.ExitCode): $($claudeSession.Stdout)"
+  $claudeSessionJson = $claudeSession.Stdout | ConvertFrom-Json
+  Assert-True ($claudeSessionJson.hookSpecificOutput.hookEventName -eq "SessionStart") "claude-code SessionStart wrong hook event"
+  Assert-True ($claudeSessionJson.hookSpecificOutput.additionalContext.Contains("<CONTEXT_MEMORY_STATE")) "claude-code SessionStart missing additionalContext"
+
   $codex = Invoke-Hook $promptPayload @("-Adapter", "codex-cli")
   Assert-True ($codex.ExitCode -eq 0) "codex-cli exited $($codex.ExitCode): $($codex.Stderr)"
   $codexJson = $codex.Stdout | ConvertFrom-Json
   Assert-True ($codexJson.hookSpecificOutput.hookEventName -eq "UserPromptSubmit") "codex-cli wrong hook event"
   Assert-True ($codexJson.hookSpecificOutput.additionalContext.Contains("<CONTEXT_MEMORY_STATE")) "codex-cli missing additionalContext"
+
+  $codexSession = Invoke-Hook $sessionPayload @("-Adapter", "codex-cli")
+  Assert-True ($codexSession.ExitCode -eq 0) "codex-cli SessionStart exited $($codexSession.ExitCode): $($codexSession.Stdout)"
+  $codexSessionJson = $codexSession.Stdout | ConvertFrom-Json
+  Assert-True ($codexSessionJson.hookSpecificOutput.hookEventName -eq "SessionStart") "codex-cli SessionStart wrong hook event"
+  Assert-True ($codexSessionJson.hookSpecificOutput.additionalContext.Contains("<CONTEXT_MEMORY_STATE")) "codex-cli SessionStart missing additionalContext"
+
+  $unknown = Invoke-Hook $promptPayload @("-Adapter", "unknown-adapter")
+  Assert-True ($unknown.ExitCode -eq 0) "unknown adapter should fail open"
+  Assert-True ([string]::IsNullOrWhiteSpace($unknown.Stdout)) "unknown adapter should not emit output"
 
   $oldUserProfile = $env:USERPROFILE
   try {
@@ -119,6 +136,9 @@ try {
     $codexHooksText = Get-Content -Raw -Encoding UTF8 -LiteralPath $codexHooksPath
     Assert-True ($claudeSettingsText.Contains("context-memory-hook.ps1")) "claude hook did not reference context-memory"
     Assert-True ($codexHooksText.Contains("context-memory-hook.ps1")) "codex hook did not reference context-memory"
+    $codexHooks = $codexHooksText | ConvertFrom-Json
+    $codexCommand = [string]$codexHooks.hooks.UserPromptSubmit[0].hooks[0].command
+    Assert-True ($codexCommand.Contains('-File "')) "codex hook should quote the -File path"
 
     $uninstallHooks = Invoke-Cli "uninstall" "all"
     Assert-True ($uninstallHooks.ExitCode -eq 0) "cli uninstall all exited $($uninstallHooks.ExitCode): $($uninstallHooks.Stdout)"
