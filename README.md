@@ -30,6 +30,12 @@ $p="$env:TEMP\agent-context-memory-bootstrap.ps1"; iwr -UseBasicParsing "http://
 
 這條命令會先把 bootstrap 下載到暫存檔，再用 `-File` 執行；不要用 `iex` 直接執行遠端內容，Windows PowerShell 對 `param(...)`、UTF-8 BOM、中文輸出會比較容易踩到邊界問題。
 
+如果要固定安裝穩定版本，而不是追 `main`，直接下載該 tag 的 installer：
+
+```powershell
+$p="$env:TEMP\agent-context-memory-install-v0.1.1.ps1"; iwr -UseBasicParsing "http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/tag/v0.1.1/install.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p -Branch v0.1.1
+```
+
 這會自動完成：
 
 - clone/update 到 `%USERPROFILE%\.agent-context-memory`

@@ -34,6 +34,47 @@ function Get-GitRoot([string]$Path) {
   return $null
 }
 
+function Test-GitRef([string]$RepoDir, [string]$Ref) {
+  & git -C $RepoDir rev-parse --verify --quiet $Ref *> $null
+  return ($LASTEXITCODE -eq 0)
+}
+
+function Sync-RequestedGitRef {
+  Write-Step "同步版本：$Branch"
+  & git -C $InstallDir fetch --quiet --prune --tags origin
+  if ($LASTEXITCODE -ne 0) {
+    throw "git fetch 失敗。"
+  }
+
+  $remoteBranchRef = "refs/remotes/origin/$Branch"
+  $tagCommitRef = "refs/tags/$Branch^{commit}"
+
+  if (Test-GitRef $InstallDir $remoteBranchRef) {
+    & git -C $InstallDir checkout -q $Branch
+    if ($LASTEXITCODE -ne 0) {
+      & git -C $InstallDir checkout -q -B $Branch "origin/$Branch"
+      if ($LASTEXITCODE -ne 0) {
+        throw "git checkout $Branch 失敗。"
+      }
+    }
+    & git -C $InstallDir pull --ff-only --quiet origin $Branch
+    if ($LASTEXITCODE -ne 0) {
+      throw "git pull --ff-only 失敗；請確認安裝目錄沒有本機修改：$InstallDir"
+    }
+    return
+  }
+
+  if (Test-GitRef $InstallDir $tagCommitRef) {
+    & git -c advice.detachedHead=false -C $InstallDir checkout -q $tagCommitRef
+    if ($LASTEXITCODE -ne 0) {
+      throw "git checkout tag $Branch 失敗。"
+    }
+    return
+  }
+
+  throw "找不到 branch 或 tag：$Branch"
+}
+
 function Add-UserPath([string]$Dir) {
   $resolved = [System.IO.Path]::GetFullPath($Dir).TrimEnd("\")
   $current = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -90,26 +131,16 @@ function Install-Repository {
     }
     Write-Step "更新工具：$InstallDir"
     & git -C $InstallDir remote set-url origin $RepoUrl
-    & git -C $InstallDir fetch origin $Branch
-    if ($LASTEXITCODE -ne 0) {
-      throw "git fetch 失敗。"
-    }
-    & git -C $InstallDir checkout $Branch
-    if ($LASTEXITCODE -ne 0) {
-      throw "git checkout $Branch 失敗。"
-    }
-    & git -C $InstallDir pull --ff-only origin $Branch
-    if ($LASTEXITCODE -ne 0) {
-      throw "git pull --ff-only 失敗；請確認安裝目錄沒有本機修改：$InstallDir"
-    }
+    Sync-RequestedGitRef
   } else {
     $parent = Split-Path -Parent $InstallDir
     New-Item -ItemType Directory -Force -Path $parent | Out-Null
     Write-Step "clone 工具到 $InstallDir"
-    & git clone --branch $Branch $RepoUrl $InstallDir
+    & git clone --quiet $RepoUrl $InstallDir
     if ($LASTEXITCODE -ne 0) {
       throw "git clone 失敗。"
     }
+    Sync-RequestedGitRef
   }
 }
 
