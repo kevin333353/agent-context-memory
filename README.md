@@ -27,7 +27,7 @@
 在 PowerShell 裡執行這一行：
 
 ```powershell
-$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet --branch v0.1.4 https://github.com/kevin333353/agent-context-memory.git $d; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.1.4
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.1.5^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.1.5
 ```
 
 這條命令會先用 `git clone` 下載固定版本的 installer，再用 `-File` 執行本機檔案；不要用 `iex` 直接執行遠端內容，Windows PowerShell 對 `param(...)`、UTF-8 BOM、中文輸出會比較容易踩到邊界問題。
@@ -50,13 +50,13 @@ $d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -
 如果只想安裝工具與 hooks，不想初始化目前專案：
 
 ```powershell
-$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet --branch v0.1.4 https://github.com/kevin333353/agent-context-memory.git $d; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.1.4 -NoProjectInit
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.1.5^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.1.5 -NoProjectInit
 ```
 
 如果要明確指定專案：
 
 ```powershell
-$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet --branch v0.1.4 https://github.com/kevin333353/agent-context-memory.git $d; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.1.4 -ProjectDir "D:\your-project"
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.1.5^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.1.5 -ProjectDir "D:\your-project"
 ```
 
 ### Linux / macOS
