@@ -27,15 +27,15 @@
 在 PowerShell 裡執行這一行：
 
 ```powershell
-$p="$env:TEMP\agent-context-memory-install-v0.1.3.ps1"; iwr -UseBasicParsing "https://raw.githubusercontent.com/kevin333353/agent-context-memory/v0.1.3/install.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p -Branch v0.1.3
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet --branch v0.1.4 https://github.com/kevin333353/agent-context-memory.git $d; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.1.4
 ```
 
-這條命令會先把固定版本的 installer 下載到暫存檔，再用 `-File` 執行；不要用 `iex` 直接執行遠端內容，Windows PowerShell 對 `param(...)`、UTF-8 BOM、中文輸出會比較容易踩到邊界問題。
+這條命令會先用 `git clone` 下載固定版本的 installer，再用 `-File` 執行本機檔案；不要用 `iex` 直接執行遠端內容，Windows PowerShell 對 `param(...)`、UTF-8 BOM、中文輸出會比較容易踩到邊界問題。
 
-如果要追最新 `main`，可以改用 bootstrap：
+如果要追最新 `main`：
 
 ```powershell
-$p="$env:TEMP\agent-context-memory-bootstrap.ps1"; iwr -UseBasicParsing "https://raw.githubusercontent.com/kevin333353/agent-context-memory/main/bootstrap.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1"
 ```
 
 這會自動完成：
@@ -50,13 +50,13 @@ $p="$env:TEMP\agent-context-memory-bootstrap.ps1"; iwr -UseBasicParsing "https:/
 如果只想安裝工具與 hooks，不想初始化目前專案：
 
 ```powershell
-$p="$env:TEMP\agent-context-memory-install-v0.1.3.ps1"; iwr -UseBasicParsing "https://raw.githubusercontent.com/kevin333353/agent-context-memory/v0.1.3/install.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p -Branch v0.1.3 -NoProjectInit
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet --branch v0.1.4 https://github.com/kevin333353/agent-context-memory.git $d; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.1.4 -NoProjectInit
 ```
 
 如果要明確指定專案：
 
 ```powershell
-$p="$env:TEMP\agent-context-memory-install-v0.1.3.ps1"; iwr -UseBasicParsing "https://raw.githubusercontent.com/kevin333353/agent-context-memory/v0.1.3/install.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p -Branch v0.1.3 -ProjectDir "D:\your-project"
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet --branch v0.1.4 https://github.com/kevin333353/agent-context-memory.git $d; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.1.4 -ProjectDir "D:\your-project"
 ```
 
 ### Linux / macOS
