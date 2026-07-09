@@ -1,0 +1,23 @@
+schema_version: 1
+fields:
+  project:
+    purpose: "專案名稱、根目錄、主要目標。"
+  current_focus:
+    purpose: "目前正在處理的工作、限制、下一步。"
+  stable_context:
+    purpose: "長期有效的架構、規則、偏好、決策。"
+  dynamic_context:
+    purpose: "最近幾輪改變的狀態、暫時假設、待確認事項。"
+  open_questions:
+    purpose: "需要使用者或外部資訊回答的問題。"
+  decisions:
+    purpose: "已做出的決策，含原因與日期。"
+  files:
+    purpose: "重要檔案、資料來源、狀態檔位置。"
+  next_actions:
+    purpose: "新的 session 或 compact 後應先做的具體步驟。"
+update_rules:
+  - "優先更新既有欄位，不要反覆新增同義欄位。"
+  - "動態資訊放在檔案後段；穩定規則放在前段。"
+  - "不要貼完整 transcript；只保留可執行的摘要與檔案路徑。"
+  - "與原始碼、文件、使用者明確指令衝突時，以原始來源為準並更新本檔。"

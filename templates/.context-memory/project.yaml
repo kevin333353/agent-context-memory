@@ -1,0 +1,20 @@
+schema_version: 1
+project:
+  name: ""
+  root: "."
+  goal: ""
+purpose: "Shared stable project memory for context-memory/v1. Commit this file when the facts are useful to the team."
+source_of_truth:
+  - "Repository files and tests override context memory."
+  - "User instructions override stale memory."
+team_context: []
+handoff_policy:
+  summary: "Use .context-memory/state.yaml for personal session state and .context-memory/handoff/*.md for cross-session or teammate handoff."
+  do_not_store:
+    - "Secrets"
+    - "Full logs"
+    - "Full transcripts"
+    - "Large diffs"
+agent_adapters:
+  claude-code: "Installed by context-memory install claude."
+  codex-cli: "Installed by context-memory install codex."

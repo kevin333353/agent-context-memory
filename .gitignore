@@ -1,0 +1,20 @@
+# Runtime and local state
+.context-memory/state.yaml
+.context-memory/history.md
+.context-memory/last-compact.md
+.context-memory/events.sqlite
+.context-memory/*.tmp
+
+# Python runtime
+__pycache__/
+*.pyc
+
+# Logs and temp files
+*.log
+*.pid
+*.tmp
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+
