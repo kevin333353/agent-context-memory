@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$installerUrl = "http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/install.ps1"
+$installerUrl = "https://raw.githubusercontent.com/kevin333353/agent-context-memory/main/install.ps1"
 $installerPath = Join-Path $env:TEMP "agent-context-memory-install.ps1"
 
 Invoke-WebRequest -UseBasicParsing -Uri $installerUrl -OutFile $installerPath

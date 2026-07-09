@@ -20,12 +20,14 @@
 - 把 hook 事件寫進 `.context-memory/events.sqlite`，方便之後用背景 worker 整理記憶表。
 - 提供 synthetic benchmark 與 Claude Code transcript usage report，量測 token savings。
 
-## 一行安裝
+## 安裝
 
-請同事在 PowerShell 裡執行這一行：
+### Windows 一行安裝
+
+在 PowerShell 裡執行這一行：
 
 ```powershell
-$p="$env:TEMP\agent-context-memory-bootstrap.ps1"; iwr -UseBasicParsing "http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/bootstrap.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p
+$p="$env:TEMP\agent-context-memory-bootstrap.ps1"; iwr -UseBasicParsing "https://raw.githubusercontent.com/kevin333353/agent-context-memory/main/bootstrap.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p
 ```
 
 這條命令會先把 bootstrap 下載到暫存檔，再用 `-File` 執行；不要用 `iex` 直接執行遠端內容，Windows PowerShell 對 `param(...)`、UTF-8 BOM、中文輸出會比較容易踩到邊界問題。
@@ -33,7 +35,7 @@ $p="$env:TEMP\agent-context-memory-bootstrap.ps1"; iwr -UseBasicParsing "http://
 如果要固定安裝穩定版本，而不是追 `main`，直接下載該 tag 的 installer：
 
 ```powershell
-$p="$env:TEMP\agent-context-memory-install-v0.1.1.ps1"; iwr -UseBasicParsing "http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/tag/v0.1.1/install.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p -Branch v0.1.1
+$p="$env:TEMP\agent-context-memory-install-v0.1.2.ps1"; iwr -UseBasicParsing "https://raw.githubusercontent.com/kevin333353/agent-context-memory/v0.1.2/install.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p -Branch v0.1.2
 ```
 
 這會自動完成：
@@ -48,14 +50,20 @@ $p="$env:TEMP\agent-context-memory-install-v0.1.1.ps1"; iwr -UseBasicParsing "ht
 如果只想安裝工具與 hooks，不想初始化目前專案：
 
 ```powershell
-$env:ACM_NO_PROJECT_INIT="1"; $p="$env:TEMP\agent-context-memory-bootstrap.ps1"; iwr -UseBasicParsing "http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/bootstrap.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p; Remove-Item Env:ACM_NO_PROJECT_INIT
+$env:ACM_NO_PROJECT_INIT="1"; $p="$env:TEMP\agent-context-memory-bootstrap.ps1"; iwr -UseBasicParsing "https://raw.githubusercontent.com/kevin333353/agent-context-memory/main/bootstrap.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p; Remove-Item Env:ACM_NO_PROJECT_INIT
 ```
 
 如果要明確指定專案：
 
 ```powershell
-$env:ACM_PROJECT_DIR="D:\your-project"; $p="$env:TEMP\agent-context-memory-bootstrap.ps1"; iwr -UseBasicParsing "http://tfyhfc01:3000/KEVIN33335313/agent-context-memory/raw/branch/main/bootstrap.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p; Remove-Item Env:ACM_PROJECT_DIR
+$env:ACM_PROJECT_DIR="D:\your-project"; $p="$env:TEMP\agent-context-memory-bootstrap.ps1"; iwr -UseBasicParsing "https://raw.githubusercontent.com/kevin333353/agent-context-memory/main/bootstrap.ps1" -OutFile $p; powershell -NoProfile -ExecutionPolicy Bypass -File $p; Remove-Item Env:ACM_PROJECT_DIR
 ```
+
+### Linux / macOS
+
+目前公開的一鍵安裝器是 Windows PowerShell 版本。Linux / macOS 不要直接複製上面的 PowerShell 指令，bash 會找不到 `$env:TEMP`、`iwr`、`powershell`。
+
+Linux / macOS 原生 `install.sh` 還在整理中；在那之前，建議先在 Windows 環境使用，或手動參考 `protocol.md` 接 adapter。
 
 ## 手動安裝
 

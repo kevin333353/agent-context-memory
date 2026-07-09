@@ -1,5 +1,5 @@
 ﻿param(
-  [string]$RepoUrl = "http://tfyhfc01:3000/KEVIN33335313/agent-context-memory.git",
+  [string]$RepoUrl = "https://github.com/kevin333353/agent-context-memory.git",
   [string]$Branch = "main",
   [string]$InstallDir = (Join-Path $env:USERPROFILE ".agent-context-memory"),
   [string]$ProjectDir = "",
