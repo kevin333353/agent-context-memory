@@ -1,26 +1,34 @@
 # Agent Context Memory
 
-Prompt-cache-aware context memory for long-running coding agents.
+面向長任務 coding agent 的 prompt-cache-aware 上下文記憶工具。
 
-`context-memory/v1` keeps agent session state in a small YAML memory table and injects it through CLI hooks. Static rules stay in global instructions for prompt-cache reuse; dynamic state stays in `.context-memory/state.yaml`; large logs, diffs, and reports stay as files.
+`context-memory/v1` 的核心想法是：不要讓 agent 每一輪都重讀完整聊天歷史，而是把目前任務狀態壓成一份小型 `.context-memory/state.yaml`，再透過 Claude Code / Codex CLI hook 注入。穩定規則放在全域指導層吃 prompt cache，動態狀態放在記憶表，大型 log、diff、report 則用檔案路徑交接。
 
-## What It Does
+## 解決什麼問題
 
-- Injects compact project memory into Claude Code and Codex CLI sessions.
-- Keeps one protocol across agent frameworks through adapters.
-- Supports `UserPromptSubmit`, `SessionStart`, `SubagentStart`, and `PostCompact`.
-- Records lightweight events to SQLite for background summarization.
-- Provides token-savings benchmarks for synthetic conversations and Claude Code transcripts.
+- 長對話越跑越貴，每輪 input token 越來越大。
+- compact 後模型容易忘記重要決策與下一步。
+- subagent 或新 session 啟動時，常重複注入大量背景。
+- 工具輸出、diff、log 一旦貼進聊天，就會長期佔用上下文。
+- prompt cache 命中很高時，仍然很難判斷到底省了多少 token。
 
-## Install
+## 這套工具做什麼
 
-Recommended Windows install path:
+- 透過 hook 把 `.context-memory/state.yaml` 注入 Claude Code / Codex CLI。
+- 用同一套 `context-memory/v1` protocol 支援不同 agent CLI adapter。
+- 支援 `UserPromptSubmit`、`SessionStart`、`SubagentStart`、`PostCompact`。
+- 把 hook 事件寫進 `.context-memory/events.sqlite`，方便之後用背景 worker 整理記憶表。
+- 提供 synthetic benchmark 與 Claude Code transcript usage report，量測 token savings。
+
+## 安裝
+
+建議在 Windows 上 clone 到這個位置：
 
 ```powershell
 git clone <repo-url> "$env:USERPROFILE\.agent-context-memory"
 ```
 
-Optionally add it to `PATH`:
+可選：把工具目錄加到使用者 `PATH`：
 
 ```powershell
 [Environment]::SetEnvironmentVariable(
@@ -30,28 +38,28 @@ Optionally add it to `PATH`:
 )
 ```
 
-Open a new terminal, then verify:
+重新開一個 terminal 後確認：
 
 ```powershell
 context-memory help
 ```
 
-If `PATH` is not configured, call it directly:
+如果沒有設定 `PATH`，也可以直接執行：
 
 ```powershell
 & "$env:USERPROFILE\.agent-context-memory\context-memory.cmd" help
 ```
 
-## Project Setup
+## 專案初始化
 
-In each repo that should use context memory:
+在要使用 context memory 的 repo 裡執行：
 
 ```powershell
 context-memory init -Cwd <repo-root> -UpdateGitignore
 context-memory validate -Cwd <repo-root>
 ```
 
-This creates `.context-memory/` files. Commit only shared files:
+初始化後會產生 `.context-memory/`。建議提交給團隊共用的檔案：
 
 ```text
 .context-memory/schema.yaml
@@ -60,7 +68,7 @@ This creates `.context-memory/` files. Commit only shared files:
 .context-memory/handoff/*.md
 ```
 
-Keep personal runtime files local:
+建議保持本機、不提交的個人 session 檔案：
 
 ```text
 .context-memory/state.yaml
@@ -69,9 +77,9 @@ Keep personal runtime files local:
 .context-memory/events.sqlite
 ```
 
-## Agent Hooks
+## 安裝 Agent Hook
 
-Install local hooks:
+在每位使用者自己的機器上安裝 hook：
 
 ```powershell
 context-memory install claude
@@ -79,61 +87,127 @@ context-memory install codex
 context-memory doctor -Cwd <repo-root>
 ```
 
-On Windows, Claude Code hooks use exec-form `command` + `args` so Git Bash/MSYS is not inserted between Claude Code and PowerShell.
+Windows 上 Claude Code hook 會使用 exec-form `command` + `args`，直接呼叫 Windows PowerShell，避免被 Git Bash/MSYS 包一層後出現 `add_item errno 1`。
 
-## New Session Resume
+## 開新 Session 怎麼接續
 
-For a new chat in the same project:
+同一個專案開新聊天時：
 
 ```powershell
 context-memory resume -Cwd <repo-root>
 ```
 
-Paste the output into the new session. If hooks are installed, the session should also receive `<CONTEXT_MEMORY_STATE>` automatically.
+把輸出的中文 resume prompt 貼到新 session。若 hook 正常，新 session 也會自動看到 `<CONTEXT_MEMORY_STATE>`；resume prompt 的作用是提醒 agent 優先使用記憶表，不要重讀完整舊 transcript。
 
-## Benchmarks
+## Prompt 裡的理想分層
 
-Synthetic conversation replay:
+```text
+Static system/developer/global instructions
+Static context-memory interpretation rules
+Tool and skill descriptions
+Dynamic <CONTEXT_MEMORY_STATE>
+Chat history
+Latest user_input
+```
+
+重點是穩定規則要放前面並保持不變，讓 prompt cache 更容易命中；hook 注入只放動態記憶表，且保持小。
+
+## Benchmark
+
+Synthetic 多輪對話估算：
 
 ```powershell
 python "$env:USERPROFILE\.agent-context-memory\benchmarks\simulate-token-savings.py" --turns 100 --chars-per-turn 3000 --state "<repo-root>\.context-memory\state.yaml"
 ```
 
-Claude Code transcript usage:
+Claude Code transcript usage 分析：
 
 ```powershell
 python "$env:USERPROFILE\.agent-context-memory\benchmarks\claude-code-usage-report.py" --cwd <repo-root>
 ```
 
-Recent measured results are documented in [docs/benchmark-results.md](docs/benchmark-results.md).
+目前實測摘要：
 
-## Repository Layout
+| 情境 | 節省比例 |
+|---|---:|
+| Synthetic 10 輪，每輪 3000 chars | 36.25% |
+| Synthetic 30 輪，每輪 3000 chars | 78.04% |
+| Synthetic 100 輪，每輪 3000 chars | 92.63% |
+| Synthetic 50 輪，每輪 6000 chars | 93.32% |
+| Claude Code 最新主 session replay | 96.42% |
+| Claude Code 四個主 transcript 合計 replay | 98.57% |
+
+更完整的結果見 [docs/benchmark-results.md](docs/benchmark-results.md)。
+
+## 專案結構
 
 ```text
 adapters/                    Agent CLI output adapters
-benchmarks/                  Token savings and Claude transcript reports
-docs/                        Guide and benchmark documentation
-scripts/                     SQLite journal and fill-table worker
-skills/context-memory/       Codex skill instructions
-templates/.context-memory/   Commit-safe project templates
+benchmarks/                  Token savings 與 Claude transcript 報告
+docs/                        教學與 benchmark 文件
+scripts/                     SQLite journal 與 fill-table worker
+skills/context-memory/       Codex skill 指令
+templates/.context-memory/   可提交的專案範本
 tests/                       Protocol smoke tests
 context-memory.ps1           CLI
-context-memory-hook.ps1      Hook entrypoint
+context-memory-hook.ps1      Hook 入口
 context-memory-core.ps1      Protocol core
 protocol.md                  context-memory/v1 contract
 ```
 
-## Design Rule
+## 設計原則
 
-Static interpretation rules belong in global agent instructions or skills. Hook output should contain only dynamic state:
+### 記憶表不是事實來源
+
+`.context-memory/state.yaml` 是 compact memory，不是資料庫真相。若它和原始碼、文件、git、測試結果或使用者明確指令衝突，以原始來源為準，並更新記憶表。
+
+### 穩定和動態要分離
+
+```text
+穩定規則 -> CLAUDE.md / AGENTS.md / skill
+動態狀態 -> .context-memory/state.yaml
+事件記錄 -> .context-memory/events.sqlite
+大型內容 -> artifact files
+```
+
+### 不要把大內容貼進 prompt
+
+大型 log、diff、測試輸出、完整 report 應該寫成檔案，再把路徑交給 agent 或 subagent。這比把內容貼進 chat history 更容易控制 token。
+
+### Subagent 只吃任務邊界和路徑
+
+省 token 的 subagent 模式是：controller 建立 task brief / report path / review package path，subagent 自己讀檔並回傳短摘要。不要把完整主線歷史複製給每個 subagent。
+
+## 核心格式
+
+Hook 注入的動態 block 長這樣：
 
 ```xml
 <CONTEXT_MEMORY_STATE protocol="context-memory/v1">
-  <STATE_YAML>
-    ...
-  </STATE_YAML>
+Location: .context-memory/state.yaml
+Schema: .context-memory/schema.yaml
+
+<STATE_YAML>
+...
+</STATE_YAML>
 </CONTEXT_MEMORY_STATE>
 ```
 
-This keeps the stable prompt prefix cacheable while the dynamic memory table remains small.
+這個 block 只放動態狀態。欄位解釋、更新規則、衝突處理規則應該放在全域指導或 skill 裡，讓 prompt-cache prefix 更穩定。
 
+## 常用指令
+
+```powershell
+context-memory init -Cwd <repo-root> -UpdateGitignore
+context-memory install claude
+context-memory install codex
+context-memory doctor -Cwd <repo-root>
+context-memory validate -Cwd <repo-root>
+context-memory status -Cwd <repo-root>
+context-memory resume -Cwd <repo-root>
+context-memory benchmark
+```
+
+## 一句話總結
+
+`context-memory/v1` 是 agent session state management：把長任務上下文拆成「穩定規則、動態記憶、大型 artifact」，讓 agent 讀正確狀態，而不是每輪重放完整聊天歷史。
