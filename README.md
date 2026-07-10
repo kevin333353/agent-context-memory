@@ -27,7 +27,7 @@
 在 PowerShell 裡執行這一行：
 
 ```powershell
-$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.1.8^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.1.8
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.2.0^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.2.0
 ```
 
 這條命令會先用 `git clone` 下載固定版本的 installer，再用 `-File` 執行本機檔案；不要用 `iex` 直接執行遠端內容，Windows PowerShell 對 `param(...)`、UTF-8 BOM、中文輸出會比較容易踩到邊界問題。
@@ -42,21 +42,28 @@ $d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -
 
 - clone/update 到 `%USERPROFILE%\.agent-context-memory`
 - 把工具目錄加入使用者 `PATH`
+- 建立工具專用 `.venv` 並安裝固定版本的 PyYAML
 - 安裝 Claude Code hooks
 - 安裝 Codex hooks
+- 安裝 Claude Code / Codex 的 context-memory skill
 - 如果目前 terminal 位於某個 git repo 內，會順便初始化該 repo 的 `.context-memory/`
+- 之後第一次進入其他 git repo 時，hook 會安全地自動初始化該 repo
 - 若有初始化專案，最後執行 `validate` / `doctor` 做檢查
+
+`v0.1.8` 安裝指令是固定版本 pin，不會自動變成新版。已使用舊指令的同事需要把 tag 與 `-Branch` 都改成 `v0.2.0`，再執行一次上面的新版指令。不要修改或重用舊 tag，否則同一條安裝命令將失去可重現性。
+
+Auto-init 只會作用在有效 git repository root，不會在工具 repo、使用者家目錄、TEMP 或一般非 git 目錄建立檔案。若某個 repo 不應啟用，先在 repo root 建立 `.context-memory-disabled`。
 
 如果只想安裝工具與 hooks，不想初始化目前專案：
 
 ```powershell
-$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.1.8^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.1.8 -NoProjectInit
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.2.0^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.2.0 -NoProjectInit
 ```
 
 如果要明確指定專案：
 
 ```powershell
-$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.1.8^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.1.8 -ProjectDir "D:\your-project"
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.2.0^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.2.0 -ProjectDir "D:\your-project"
 ```
 
 ### Linux / macOS
@@ -207,7 +214,7 @@ Claude Code transcript usage 分析：
 python "$env:USERPROFILE\.agent-context-memory\benchmarks\claude-code-usage-report.py" --cwd <repo-root>
 ```
 
-目前實測摘要：
+目前離線 input replay 上限估算：
 
 | 情境 | 節省比例 |
 |---|---:|
@@ -215,8 +222,9 @@ python "$env:USERPROFILE\.agent-context-memory\benchmarks\claude-code-usage-repo
 | Synthetic 30 輪，每輪 3000 chars | 78.04% |
 | Synthetic 100 輪，每輪 3000 chars | 92.63% |
 | Synthetic 50 輪，每輪 6000 chars | 93.32% |
-| Claude Code 最新主 session replay | 96.42% |
-| Claude Code 四個主 transcript 合計 replay | 98.57% |
+| Claude Code 最新主 session replay 上限 | 96.42% |
+
+這些數字只估算 input context 壓力，不代表 compact 後的任務成功率，也不是帳單節省保證。舊版曾公布的跨四個 transcript `98.57%` 已撤回，原因是 replay accumulator 沒有在 session 邊界重設。
 
 更完整的結果見 [docs/benchmark-results.md](docs/benchmark-results.md)。
 

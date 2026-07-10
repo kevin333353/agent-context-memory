@@ -122,6 +122,7 @@ def run_simulation(args):
     saved_total = baseline_total - memory_total
 
     return {
+        "estimate_kind": "offline_upper_bound_input_replay_estimate",
         "token_counter": token_source,
         "assumptions": {
             "turns": args.turns,

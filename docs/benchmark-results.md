@@ -2,7 +2,7 @@
 
 These numbers are offline estimates unless they come from Claude usage metadata. Provider usage metadata is the source of truth for billing.
 
-## Synthetic Replay
+## Synthetic Replay: Offline Upper Bound
 
 State size at measurement time: about 1.4k tokens.
 
@@ -15,12 +15,16 @@ State size at measurement time: about 1.4k tokens.
 
 Short sessions can look worse at the beginning because the memory table has a fixed startup cost. The savings become significant as raw chat history grows.
 
-## Claude Code Transcript Replay
+## Claude Code Transcript Replay: Offline Upper Bound
 
 | Dataset | Replay Saved |
 |---|---:|
 | Latest main session | 96.42% |
-| Four main transcripts combined | 98.57% |
+
+The previously published `98.57%` four-transcript aggregate is withdrawn. The
+old implementation carried running context across independent transcript
+files. The corrected report resets replay state per transcript and emits
+per-session rows before aggregating them.
 
 Observed Claude usage metadata for the combined run:
 
@@ -41,5 +45,8 @@ Prompt cache and context memory measure different effects:
 - Context memory reduces the need to replay long chat history.
 - Artifact handoff prevents large logs, diffs, and reports from becoming permanent chat history.
 
-The most reliable evaluation is layered: inspect provider usage metadata, replay estimates, memory context size, output tokens, and subagent usage separately.
-
+The most reliable evaluation is layered: inspect provider usage metadata,
+per-session replay estimates, memory context size, output tokens, and subagent
+usage separately. These replay estimates measure input-context pressure only;
+they do not establish task quality after compression or guaranteed billing
+savings.

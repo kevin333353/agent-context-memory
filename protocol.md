@@ -100,9 +100,10 @@ validation failure or conflict:
 | `claude-code` | `haiku` | `sonnet` |
 | `codex-cli` | `gpt-5-nano` | `gpt-5-mini` |
 
-Hooks should record events to `.context-memory/events.sqlite`; they should not
-block user interaction by calling a model directly unless explicitly configured
-to do so.
+Hooks record redacted, bounded events to `.context-memory/events.sqlite`. Once
+the unprocessed event threshold is reached, they launch the managed fill-table
+worker as a detached process. Hooks never block user interaction by calling a
+model directly.
 
 Use `scripts/fill_table_worker.py --dry-run` style runs first. Only write
 `state.yaml` with `--apply` after the generated YAML passes validation.
