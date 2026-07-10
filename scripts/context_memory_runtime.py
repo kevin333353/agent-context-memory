@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+import argparse
 import json
 import os
 import shutil
@@ -271,3 +272,47 @@ def managed_python(tool_root: Path) -> Path | None:
         tool_root / ".venv" / "bin" / "python",
     ]
     return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
+def auto_initialize(cwd: Path, tool_root: Path) -> dict:
+    existing = find_memory_root(cwd)
+    if existing:
+        return {
+            "initialized": False,
+            "memory_root": str(existing),
+            "reason": "existing",
+        }
+    config = load_config(tool_root / "config.yaml")
+    if os.environ.get("CONTEXT_MEMORY_ALLOW_TEMP_AUTO_INIT") == "1":
+        config["auto_init"]["exclude_temp_roots"] = False
+    eligible, project_root, reason = is_auto_init_eligible(cwd, tool_root, config)
+    if not eligible or project_root is None:
+        return {"initialized": False, "memory_root": None, "reason": reason}
+    memory_root = initialize_memory(
+        project_root,
+        tool_root,
+        update_gitignore=bool(config["auto_init"].get("update_gitignore", True)),
+        origin="hook_auto",
+    )
+    return {
+        "initialized": True,
+        "memory_root": str(memory_root),
+        "reason": "initialized",
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    auto_parser = subparsers.add_parser("auto-init")
+    auto_parser.add_argument("--cwd", required=True)
+    auto_parser.add_argument("--tool-root", required=True)
+    args = parser.parse_args()
+    if args.command == "auto-init":
+        result = auto_initialize(Path(args.cwd), Path(args.tool_root))
+        print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

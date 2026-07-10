@@ -84,6 +84,65 @@ function ConvertTo-FrameworkEvent([string]$protocolEvent) {
   }
 }
 
+function Get-ContextMemoryPythonPath {
+  $managed = Join-Path $script:ContextMemoryCoreRoot ".venv\Scripts\python.exe"
+  if (Test-Path -LiteralPath $managed) {
+    return $managed
+  }
+  $pythonCommand = Get-Command python -CommandType Application -ErrorAction SilentlyContinue
+  if ($pythonCommand) {
+    return $pythonCommand.Source
+  }
+  return $null
+}
+
+function Write-ContextMemoryDiagnostic([string]$memoryRoot, [string]$message) {
+  try {
+    if ($memoryRoot) {
+      $path = Join-Path $memoryRoot "diagnostics.log"
+    } else {
+      $path = Join-Path $script:ContextMemoryCoreRoot "logs\hook-diagnostics.log"
+    }
+    $parent = Split-Path -Parent $path
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    $safe = (($message -replace "[`r`n`0]", " ").Trim())
+    if ($safe.Length -gt 2000) {
+      $safe = $safe.Substring(0, 2000)
+    }
+    $stamp = [DateTime]::UtcNow.ToString("o")
+    $lines = @()
+    if (Test-Path -LiteralPath $path) {
+      $lines = @(Get-Content -Encoding UTF8 -LiteralPath $path | Select-Object -Last 199)
+    }
+    @($lines + "$stamp $safe") | Set-Content -Encoding UTF8 -LiteralPath $path
+  } catch {
+    # Diagnostics must never break the host hook.
+  }
+}
+
+function Invoke-ContextMemoryAutoInit([string]$cwd) {
+  $pythonPath = Get-ContextMemoryPythonPath
+  $scriptPath = Join-Path $script:ContextMemoryCoreRoot "scripts\context_memory_runtime.py"
+  if (-not $pythonPath -or -not (Test-Path -LiteralPath $scriptPath)) {
+    Write-ContextMemoryDiagnostic $null "auto-init skipped: Python runtime unavailable"
+    return $null
+  }
+  try {
+    $output = & $pythonPath $scriptPath auto-init --cwd $cwd --tool-root $script:ContextMemoryCoreRoot 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+      Write-ContextMemoryDiagnostic $null "auto-init failed with exit code $LASTEXITCODE"
+      return $null
+    }
+    $result = $output | ConvertFrom-Json
+    if ($result.memory_root) {
+      return [string]$result.memory_root
+    }
+  } catch {
+    Write-ContextMemoryDiagnostic $null "auto-init failed: $($_.Exception.Message)"
+  }
+  return $null
+}
+
 function Initialize-ContextMemory([string]$cwd) {
   $memoryRoot = Join-Path $cwd ".context-memory"
   New-Item -ItemType Directory -Force -Path $memoryRoot | Out-Null
@@ -241,8 +300,10 @@ function Write-ContextMemoryJournal($inputObj, [string]$memoryRoot, [string]$eve
     return $false
   }
 
-  $scriptPath = Join-Path $script:ContextMemoryCoreRoot "scripts\context_memory_journal.py"
-  if (-not (Test-Path -LiteralPath $scriptPath)) {
+  $pythonPath = Get-ContextMemoryPythonPath
+  $scriptPath = Join-Path $script:ContextMemoryCoreRoot "scripts\context_memory_dispatch.py"
+  if (-not $pythonPath -or -not (Test-Path -LiteralPath $scriptPath)) {
+    Write-ContextMemoryDiagnostic $memoryRoot "journal skipped: managed runtime unavailable"
     return $false
   }
 
@@ -264,7 +325,6 @@ function Write-ContextMemoryJournal($inputObj, [string]$memoryRoot, [string]$eve
     }
   }
 
-  $dbPath = Join-Path $memoryRoot "events.sqlite"
   $journalEvent = @{
     adapter = $adapterName
     event = $event
@@ -273,16 +333,20 @@ function Write-ContextMemoryJournal($inputObj, [string]$memoryRoot, [string]$eve
     cwd = $cwd
     prompt = $prompt
     summary = $summary
-    store_full_payload = $false
-    max_prompt_chars = 8000
   } | ConvertTo-Json -Depth 8 -Compress
 
   try {
     $eventBytes = [System.Text.Encoding]::UTF8.GetBytes($journalEvent)
     $eventB64 = [Convert]::ToBase64String($eventBytes)
-    $null = & python $scriptPath --db $dbPath --event-b64 $eventB64 2>$null
-    return ($LASTEXITCODE -eq 0)
+    $output = & $pythonPath $scriptPath record-and-dispatch --memory-root $memoryRoot --adapter $adapterName --tool-root $script:ContextMemoryCoreRoot --event-b64 $eventB64 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+      Write-ContextMemoryDiagnostic $memoryRoot "journal/dispatch failed with exit code $LASTEXITCODE"
+      return $false
+    }
+    $result = $output | ConvertFrom-Json
+    return [bool]$result.journaled
   } catch {
+    Write-ContextMemoryDiagnostic $memoryRoot "journal/dispatch failed: $($_.Exception.Message)"
     return $false
   }
 }
@@ -381,6 +445,9 @@ function Invoke-ContextMemoryProtocol {
   }
 
   $memoryRoot = Find-ContextMemoryRoot $cwd
+  if (-not $memoryRoot -and $Mode -in @("auto", "inject") -and $event -in @("user_prompt_submit", "session_start")) {
+    $memoryRoot = Invoke-ContextMemoryAutoInit $cwd
+  }
 
   if ($Mode -eq "post-compact" -or ($Mode -eq "auto" -and $event -eq "post_compact")) {
     $saved = Save-ContextMemoryCompactSummary $inputObj $memoryRoot

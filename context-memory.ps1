@@ -357,7 +357,7 @@ function Invoke-InstallCommandFor([string]$TargetName) {
       }
       $hook = New-ClaudeHookDef
       Set-HookEvent $settings.hooks "UserPromptSubmit" "" $hook
-      Set-HookEvent $settings.hooks "SessionStart" "compact" $hook
+      Set-HookEvent $settings.hooks "SessionStart" "startup|resume|clear|compact" $hook
       Set-HookEvent $settings.hooks "SubagentStart" "" $hook
       Set-HookEvent $settings.hooks "PostCompact" "" $hook
       Write-JsonObject $settingsPath $settings
@@ -371,7 +371,7 @@ function Invoke-InstallCommandFor([string]$TargetName) {
       }
       $hook = New-CodexHookDef
       Set-HookEvent $settings.hooks "UserPromptSubmit" "" $hook
-      Set-HookEvent $settings.hooks "SessionStart" "compact" $hook
+      Set-HookEvent $settings.hooks "SessionStart" "startup|resume|clear|compact" $hook
       Set-HookEvent $settings.hooks "SubagentStart" "" $hook
       Set-HookEvent $settings.hooks "PostCompact" "" $hook
       Write-JsonObject $settingsPath $settings

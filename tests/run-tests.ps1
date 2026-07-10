@@ -49,8 +49,38 @@ function Invoke-Cli {
 
 $TempRoot = Join-Path $env:TEMP ("context-memory-protocol-test-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
+$oldAllowTempAutoInit = $env:CONTEXT_MEMORY_ALLOW_TEMP_AUTO_INIT
+$oldDisableWorkerDispatch = $env:CONTEXT_MEMORY_DISABLE_WORKER_DISPATCH
+$env:CONTEXT_MEMORY_ALLOW_TEMP_AUTO_INIT = "1"
+$env:CONTEXT_MEMORY_DISABLE_WORKER_DISPATCH = "1"
 
 try {
+  $autoRepo = Join-Path $TempRoot "auto-repo"
+  $autoNested = Join-Path $autoRepo "src\feature"
+  New-Item -ItemType Directory -Force -Path $autoNested | Out-Null
+  & git -C $autoRepo init --quiet
+  $autoPayload = @{ cwd = $autoNested; hook_event_name = "UserPromptSubmit"; prompt = "first prompt" } | ConvertTo-Json -Compress
+  $auto = Invoke-Hook $autoPayload @("-Adapter", "generic-json")
+  Assert-True ($auto.ExitCode -eq 0) "auto-init hook exited $($auto.ExitCode): $($auto.Stdout)"
+  $autoJson = $auto.Stdout | ConvertFrom-Json
+  Assert-True ($autoJson.action -eq "inject") "first hook did not inject after auto-init"
+  Assert-True (Test-Path -LiteralPath (Join-Path $autoRepo ".context-memory\state.yaml")) "hook did not auto-initialize git root"
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $autoNested ".context-memory"))) "hook initialized nested cwd instead of git root"
+  $autoMetadata = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $autoRepo ".context-memory\metadata.json") | ConvertFrom-Json
+  Assert-True ($autoMetadata.initialization_origin -eq "hook_auto") "auto-init origin was not recorded"
+  $autoGitignore = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $autoRepo ".gitignore")
+  Assert-True ($autoGitignore.Contains(".context-memory/events.sqlite")) "auto-init did not protect local memory files"
+
+  $disabledRepo = Join-Path $TempRoot "disabled-repo"
+  New-Item -ItemType Directory -Force -Path $disabledRepo | Out-Null
+  & git -C $disabledRepo init --quiet
+  New-Item -ItemType File -Force -Path (Join-Path $disabledRepo ".context-memory-disabled") | Out-Null
+  $disabledPayload = @{ cwd = $disabledRepo; hook_event_name = "UserPromptSubmit"; prompt = "skip" } | ConvertTo-Json -Compress
+  $disabled = Invoke-Hook $disabledPayload @("-Adapter", "generic-json")
+  $disabledJson = $disabled.Stdout | ConvertFrom-Json
+  Assert-True ($disabledJson.action -eq "none") "disabled repo should not inject"
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $disabledRepo ".context-memory"))) "disabled repo was auto-initialized"
+
   $initPayload = @{ cwd = $TempRoot; hook_event_name = "UserPromptSubmit" } | ConvertTo-Json -Compress
   $init = Invoke-Hook $initPayload @("-Mode", "init")
   Assert-True ($init.ExitCode -eq 0) "init failed: $($init.Stderr)"
@@ -139,6 +169,8 @@ try {
     $codexHooks = $codexHooksText | ConvertFrom-Json
     $codexCommand = [string]$codexHooks.hooks.UserPromptSubmit[0].hooks[0].command
     Assert-True ($codexCommand.Contains('-File "')) "codex hook should quote the -File path"
+    $codexSessionMatcher = [string]$codexHooks.hooks.SessionStart[0].matcher
+    Assert-True ($codexSessionMatcher -eq "startup|resume|clear|compact") "codex SessionStart matcher did not cover every documented source"
 
     $uninstallHooks = Invoke-Cli "uninstall" "all"
     Assert-True ($uninstallHooks.ExitCode -eq 0) "cli uninstall all exited $($uninstallHooks.ExitCode): $($uninstallHooks.Stdout)"
@@ -168,6 +200,8 @@ try {
 
   Write-Output "context-memory protocol tests passed"
 } finally {
+  $env:CONTEXT_MEMORY_ALLOW_TEMP_AUTO_INIT = $oldAllowTempAutoInit
+  $env:CONTEXT_MEMORY_DISABLE_WORKER_DISPATCH = $oldDisableWorkerDispatch
   if (Test-Path -LiteralPath $TempRoot) {
     Remove-Item -LiteralPath $TempRoot -Recurse -Force
   }
