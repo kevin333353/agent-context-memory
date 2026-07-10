@@ -128,6 +128,9 @@ try {
 
   $cliInit = Invoke-Cli "init" "-Cwd" $TempRoot "-UpdateGitignore"
   Assert-True ($cliInit.ExitCode -eq 0) "cli init exited $($cliInit.ExitCode): $($cliInit.Stdout)"
+  $cliVersion = Invoke-Cli "version"
+  Assert-True ($cliVersion.ExitCode -eq 0) "cli version exited $($cliVersion.ExitCode): $($cliVersion.Stdout)"
+  Assert-True ($cliVersion.Stdout.Trim() -eq "0.2.0") "cli version did not report 0.2.0"
   $gitignoreText = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $TempRoot ".gitignore")
   Assert-True ($gitignoreText.Contains("!.context-memory/schema.yaml")) "cli init did not add team-safe gitignore rules"
 

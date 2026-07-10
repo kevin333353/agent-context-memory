@@ -14,6 +14,15 @@ Agent CLIs are adapters; the stable contract is the protocol event and the
 | `.context-memory/history.md` | Append-only compact/session summaries |
 | `.context-memory/last-compact.md` | Most recent compact summary |
 | `.context-memory/events.sqlite` | Lightweight event journal for background summarization |
+| `.context-memory/metadata.json` | Local initialization origin and timestamp |
+| `.context-memory/diagnostics.log` | Bounded local hook/worker diagnostics without prompt text |
+
+## Automatic Initialization
+
+On `SessionStart` or `UserPromptSubmit`, an absent memory root is initialized
+at the git repository root when auto-init is enabled. Tool, profile, temporary,
+non-git, and `.context-memory-disabled` roots are skipped. Initialization is
+idempotent and the first event can inject the new state in the same hook run.
 
 ## Input Event
 

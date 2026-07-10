@@ -141,11 +141,12 @@ context-memory doctor -Cwd <repo-root>
 
 Windows 上 Claude Code hook 會使用 exec-form `command` + `args`，直接呼叫 Windows PowerShell，避免被 Git Bash/MSYS 包一層後出現 `add_item errno 1`。
 
-如果 Codex 開新對話時顯示 `SessionStart hook (failed)`，但送出訊息後看到 `UserPromptSubmit hook (completed)` 與 `<CONTEXT_MEMORY_STATE>`，代表使用者訊息仍有成功注入。建議更新到 `v0.1.8` 以上並重新安裝 Codex hook：
+如果 Codex 開新對話時顯示 `SessionStart hook (failed)`，先更新到 `v0.2.0` 並重新安裝 Codex hook，再執行 `doctor` 查看持久 diagnostics：
 
 ```powershell
 context-memory install codex
 context-memory doctor -Cwd <repo-root>
+context-memory version
 ```
 
 ## 停用 / 移除

@@ -889,6 +889,14 @@ function Invoke-BenchmarkCommand {
   exit $LASTEXITCODE
 }
 
+function Invoke-VersionCommand {
+  $versionPath = Join-Path $ToolRoot "VERSION"
+  if (-not (Test-Path -LiteralPath $versionPath)) {
+    throw "VERSION file not found: $versionPath"
+  }
+  Write-Output ((Get-Content -Raw -Encoding UTF8 -LiteralPath $versionPath).Trim())
+}
+
 function Show-Help {
   Write-Output @"
 context-memory CLI
@@ -908,6 +916,7 @@ Commands:
   resume            Print a new-chat resume prompt
   compact-state     Add a history marker when state.yaml exceeds the token target
   benchmark         Run synthetic token-savings benchmark
+  version           Show installed version
   help              Show this help
 
 Options:
@@ -928,6 +937,7 @@ switch ($Command.ToLowerInvariant()) {
   "resume" { Invoke-ResumeCommand }
   "compact-state" { Invoke-CompactStateCommand }
   "benchmark" { Invoke-BenchmarkCommand }
+  "version" { Invoke-VersionCommand }
   "help" { Invoke-ContextMemoryHelp }
   "--help" { Invoke-ContextMemoryHelp }
   "-h" { Invoke-ContextMemoryHelp }

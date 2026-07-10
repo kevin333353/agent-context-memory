@@ -253,8 +253,8 @@ if ($resolvedProject) {
     Invoke-ContextMemory @("doctor", "-Cwd", $resolvedProject)
   }
 } else {
-  Write-Step "未指定專案，且目前目錄不是可初始化的 git repo；只安裝全域工具與 hooks。"
-  Write-Step "之後可在專案根目錄執行：context-memory init -UpdateGitignore"
+  Write-Step "本次初始化專案數：0。已安裝全域工具與 hooks。"
+  Write-Step "第一次進入符合條件的 git repo 時，hook 會自動初始化；也可手動執行 context-memory init -UpdateGitignore。"
 }
 
 Write-Step "安裝完成。新開 terminal 後可直接使用：context-memory help"
