@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import yaml
@@ -135,6 +136,38 @@ class FillTableWorkerTests(unittest.TestCase):
         run_codex.assert_called_once_with(
             "prompt", "gpt-5-nano", self.repo, "low"
         )
+
+    def test_codex_subprocess_marks_worker_child(self):
+        def fake_run(command, **kwargs):
+            output_path = Path(
+                command[command.index("--output-last-message") + 1]
+            )
+            output_path.write_text('{"no_change":true}', encoding="utf-8")
+            self.assertEqual(kwargs["env"]["CONTEXT_MEMORY_WORKER_CHILD"], "1")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with patch.object(worker.subprocess, "run", side_effect=fake_run):
+            output, _ = worker.run_codex(
+                "prompt", "gpt-5-nano", self.repo, "low"
+            )
+
+        self.assertIn("no_change", output)
+
+    def test_claude_subprocess_marks_worker_child(self):
+        def fake_run(command, **kwargs):
+            self.assertEqual(kwargs["env"]["CONTEXT_MEMORY_WORKER_CHILD"], "1")
+            return SimpleNamespace(
+                returncode=0,
+                stdout='{"result":"{\\"no_change\\":true}"}',
+                stderr="",
+            )
+
+        with patch.object(worker.subprocess, "run", side_effect=fake_run):
+            output, _ = worker.run_claude(
+                "prompt", "haiku", 0.01, self.repo
+            )
+
+        self.assertIn("no_change", output)
 
 
 if __name__ == "__main__":

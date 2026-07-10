@@ -645,7 +645,7 @@ function Invoke-DoctorCommand {
 
     $journalPath = Join-Path $memoryRoot "events.sqlite"
     $journalScript = Join-Path $ToolRoot "scripts\context_memory_journal.py"
-    if ($pythonPath -and (Test-Path -LiteralPath $journalScript) -and (Test-Path -LiteralPath $journalPath)) {
+    if ($pythonPath -and (Test-Path -LiteralPath $journalScript)) {
       try {
         $workerOutput = & $pythonPath $journalScript --db $journalPath --status 2>&1 | Out-String
         $worker = $workerOutput | ConvertFrom-Json

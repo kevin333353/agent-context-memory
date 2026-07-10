@@ -80,6 +80,20 @@ try {
   $autoConfig = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $autoRepo ".context-memory\config.yaml")
   Assert-True ($autoConfig.Contains("auto_run: true")) "new project did not enable background worker"
 
+  $autoJournalPath = Join-Path $autoRepo ".context-memory\events.sqlite"
+  $countEvents = { param($Path) [int](& $managedPython -c "import sqlite3; c=sqlite3.connect(r'$Path'); print(c.execute('select count(*) from events').fetchone()[0]); c.close()") }
+  $eventsBeforeWorkerChild = & $countEvents $autoJournalPath
+  $oldWorkerChild = $env:CONTEXT_MEMORY_WORKER_CHILD
+  try {
+    $env:CONTEXT_MEMORY_WORKER_CHILD = "1"
+    $workerChildHook = Invoke-Hook $autoPayload @("-Adapter", "generic-json")
+  } finally {
+    $env:CONTEXT_MEMORY_WORKER_CHILD = $oldWorkerChild
+  }
+  $eventsAfterWorkerChild = & $countEvents $autoJournalPath
+  Assert-True ([string]::IsNullOrWhiteSpace($workerChildHook.Stdout)) "worker child hook should emit no context"
+  Assert-True ($eventsAfterWorkerChild -eq $eventsBeforeWorkerChild) "worker child hook journaled its own prompt"
+
   $disabledRepo = Join-Path $TempRoot "disabled-repo"
   New-Item -ItemType Directory -Force -Path $disabledRepo | Out-Null
   & git -C $disabledRepo init --quiet

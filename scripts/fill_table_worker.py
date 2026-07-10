@@ -166,6 +166,7 @@ def run_claude(prompt: str, model: str, budget: float | None, cwd: Path) -> tupl
         cmd.extend(["--max-budget-usd", str(budget)])
     cmd.append(prompt)
     env = os.environ.copy()
+    env["CONTEXT_MEMORY_WORKER_CHILD"] = "1"
     if not env.get("CONTEXT_MEMORY_USE_ANTHROPIC_API_KEY"):
         env.pop("ANTHROPIC_API_KEY", None)
         env.pop("CLAUDE_API_KEY", None)
@@ -196,7 +197,16 @@ def run_codex(
     if reasoning_effort:
         cmd[4:4] = ["-c", f'model_reasoning_effort="{reasoning_effort}"']
     try:
-        proc = subprocess.run(cmd, input=prompt, text=True, capture_output=True, encoding="utf-8")
+        env = os.environ.copy()
+        env["CONTEXT_MEMORY_WORKER_CHILD"] = "1"
+        proc = subprocess.run(
+            cmd,
+            input=prompt,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            env=env,
+        )
         if proc.returncode != 0:
             raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or f"codex exited {proc.returncode}")
         return output_path.read_text(encoding="utf-8"), " ".join(cmd)

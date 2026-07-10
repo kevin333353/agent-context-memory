@@ -10,6 +10,11 @@ $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = $Utf8NoBom
 $OutputEncoding = $Utf8NoBom
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+if ($env:CONTEXT_MEMORY_WORKER_CHILD -eq "1") {
+  exit 0
+}
+
 $InputRaw = [Console]::In.ReadToEnd()
 
 function Write-HookDiagnostic([string]$Message) {
