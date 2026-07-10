@@ -119,6 +119,33 @@ class ContextMemoryRuntimeTests(unittest.TestCase):
         self.assertIn(".context-memory/events.sqlite", gitignore)
         self.assertIn("!.context-memory/schema.yaml", gitignore)
 
+    def test_migrates_v1_config_and_enables_managed_worker(self):
+        self.require_runtime()
+        config_path = self.root / "config.yaml"
+        config_path.write_text(
+            """schema_version: 1
+fill_table:
+  worker:
+    auto_run: false
+    status: not_installed
+  adapters:
+    codex-cli:
+      routine_model: custom-routine
+""",
+            encoding="utf-8",
+        )
+
+        migrated = runtime.migrate_config_file(config_path)
+
+        self.assertEqual(migrated["schema_version"], 2)
+        self.assertTrue(migrated["fill_table"]["worker"]["auto_run"])
+        self.assertEqual(migrated["fill_table"]["worker"]["status"], "managed")
+        self.assertTrue(migrated["fill_table"]["journal"]["capture_prompts"])
+        self.assertEqual(
+            migrated["fill_table"]["adapters"]["codex-cli"]["routine_model"],
+            "custom-routine",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

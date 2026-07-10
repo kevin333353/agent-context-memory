@@ -58,10 +58,15 @@ class ContextMemoryDispatchTests(unittest.TestCase):
         second = dispatch.record_and_maybe_dispatch(
             self.memory_root, "codex-cli", self.event(), self.config, TOOL_ROOT, launch
         )
+        third = dispatch.record_and_maybe_dispatch(
+            self.memory_root, "codex-cli", self.event(), self.config, TOOL_ROOT, launch
+        )
 
         self.assertFalse(first["dispatch_due"])
         self.assertTrue(second["dispatch_due"])
         self.assertTrue(second["worker_started"])
+        self.assertFalse(third["worker_started"])
+        self.assertEqual(third["dispatch_reason"], "cooldown")
         self.assertEqual(len(launches), 1)
 
     def test_post_compact_forces_dispatch(self):

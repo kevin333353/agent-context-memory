@@ -90,6 +90,30 @@ try {
   Assert-True ($disabledJson.action -eq "none") "disabled repo should not inject"
   Assert-True (-not (Test-Path -LiteralPath (Join-Path $disabledRepo ".context-memory"))) "disabled repo was auto-initialized"
 
+  $invalidRepo = Join-Path $TempRoot "invalid-input-repo"
+  New-Item -ItemType Directory -Force -Path $invalidRepo | Out-Null
+  & git -C $invalidRepo init --quiet
+  $oldClaudeProjectDir = $env:CLAUDE_PROJECT_DIR
+  try {
+    $env:CLAUDE_PROJECT_DIR = $invalidRepo
+    $invalidHook = Invoke-Hook "not-json" @("-Adapter", "generic-json")
+  } finally {
+    $env:CLAUDE_PROJECT_DIR = $oldClaudeProjectDir
+  }
+  $invalidHookJson = $invalidHook.Stdout | ConvertFrom-Json
+  Assert-True ($invalidHookJson.action -eq "none") "invalid hook input should fail open without injection"
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $invalidRepo ".context-memory"))) "invalid hook input triggered auto-init"
+
+  $autoStatePath = Join-Path $autoRepo ".context-memory\state.yaml"
+  $autoStateOriginal = Get-Content -Raw -Encoding UTF8 -LiteralPath $autoStatePath
+  $oversizedLine = "  - `"" + ("x" * 12000) + "`""
+  $oversizedState = $autoStateOriginal -replace '(?m)^dynamic_context:\s*\[\]\s*$', "dynamic_context:`n$oversizedLine"
+  $oversizedState | Set-Content -Encoding UTF8 -LiteralPath $autoStatePath
+  $oversizedHook = Invoke-Hook $autoPayload @("-Adapter", "generic-json")
+  $oversizedJson = $oversizedHook.Stdout | ConvertFrom-Json
+  Assert-True ($oversizedJson.action -eq "none") "oversized state should not be injected"
+  $autoStateOriginal | Set-Content -Encoding UTF8 -LiteralPath $autoStatePath
+
   $initPayload = @{ cwd = $TempRoot; hook_event_name = "UserPromptSubmit" } | ConvertTo-Json -Compress
   $init = Invoke-Hook $initPayload @("-Mode", "init")
   Assert-True ($init.ExitCode -eq 0) "init failed: $($init.Stderr)"

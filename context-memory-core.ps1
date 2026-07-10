@@ -272,7 +272,7 @@ Keep handoffs short and actionable:
 
   if (-not (Test-Path -LiteralPath $configPath)) {
     @"
-schema_version: 1
+schema_version: 2
 auto_init:
   enabled: true
   update_gitignore: true
@@ -382,8 +382,22 @@ function Get-ContextMemoryContext([string]$memoryRoot) {
     return $null
   }
 
-  $stateText = Get-Content -Raw -Encoding UTF8 -LiteralPath $statePath
-  if ([string]::IsNullOrWhiteSpace($stateText)) {
+  $pythonPath = Get-ContextMemoryPythonPath
+  $runtimeScript = Join-Path $script:ContextMemoryCoreRoot "scripts\context_memory_runtime.py"
+  if (-not $pythonPath -or -not (Test-Path -LiteralPath $runtimeScript)) {
+    Write-ContextMemoryDiagnostic $memoryRoot "state injection skipped: validator runtime unavailable"
+    return $null
+  }
+  try {
+    $readOutput = & $pythonPath $runtimeScript read-state --memory-root $memoryRoot 2>&1 | Out-String
+    $readResult = $readOutput | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or -not $readResult.valid) {
+      Write-ContextMemoryDiagnostic $memoryRoot "state injection skipped: $($readResult.error)"
+      return $null
+    }
+    $stateText = [string]$readResult.state_text
+  } catch {
+    Write-ContextMemoryDiagnostic $memoryRoot "state injection skipped: validator returned invalid output"
     return $null
   }
 
@@ -443,6 +457,19 @@ function Invoke-ContextMemoryProtocol {
 
   $stdin = Read-ContextMemoryInput $InputRaw
   $inputObj = $stdin.obj
+  if (-not [string]::IsNullOrWhiteSpace($stdin.raw) -and -not $inputObj) {
+    Write-ContextMemoryDiagnostic $null "invalid hook input JSON; injection skipped"
+    return @{
+      protocol = "context-memory/v1"
+      action = "none"
+      event = "invalid_input"
+      framework_event = ""
+      cwd = (Get-Location).Path
+      memory_root = $null
+      context = $null
+      journaled = $false
+    }
+  }
   $cwd = Get-ContextMemoryCwd $inputObj
 
   $frameworkEvent = "UserPromptSubmit"

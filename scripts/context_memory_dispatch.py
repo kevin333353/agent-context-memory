@@ -17,13 +17,13 @@ try:
     from scripts import fill_table_worker
     from scripts.context_memory_runtime import (
         exclusive_lock,
-        load_config,
         managed_python,
+        migrate_config_file,
     )
 except ImportError:
     import context_memory_journal as journal
     import fill_table_worker
-    from context_memory_runtime import exclusive_lock, load_config, managed_python
+    from context_memory_runtime import exclusive_lock, managed_python, migrate_config_file
 
 
 def _parse_utc(value: str) -> datetime | None:
@@ -122,7 +122,7 @@ def record_and_maybe_dispatch(
     state = journal.get_worker_state(db_path)
     cooldown = max(0, int(fill_config.get("retry_cooldown_seconds") or 0))
     last_attempt = _parse_utc(str(state.get("last_attempt_utc") or ""))
-    if state.get("last_status") in {"running", "failed"} and last_attempt and cooldown:
+    if state.get("last_status") in {"queued", "running", "failed"} and last_attempt and cooldown:
         elapsed = (datetime.now(timezone.utc) - last_attempt).total_seconds()
         if elapsed < cooldown:
             result["dispatch_reason"] = "cooldown"
@@ -131,7 +131,14 @@ def record_and_maybe_dispatch(
     launch = launch_worker or _launch_detached
     try:
         result["worker_started"] = bool(launch(tool_root, memory_root, adapter))
-        if not result["worker_started"]:
+        if result["worker_started"]:
+            journal.update_worker_state(
+                db_path,
+                last_status="queued",
+                last_attempt_utc=datetime.now(timezone.utc).isoformat(),
+                last_error="",
+            )
+        else:
             result["dispatch_reason"] = "runtime_unavailable"
     except Exception as exc:
         result["dispatch_reason"] = "launch_failed"
@@ -172,7 +179,7 @@ def main() -> int:
     tool_root = Path(args.tool_root)
     if args.command == "record-and-dispatch":
         event = json.loads(base64.b64decode(args.event_b64).decode("utf-8"))
-        config = load_config(memory_root / "config.yaml")
+        config = migrate_config_file(memory_root / "config.yaml")
         result = record_and_maybe_dispatch(
             memory_root, args.adapter, event, config, tool_root
         )

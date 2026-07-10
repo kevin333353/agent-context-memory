@@ -3,6 +3,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -118,6 +119,22 @@ class FillTableWorkerTests(unittest.TestCase):
         self.assertEqual(state["last_processed_event_id"], before)
         self.assertEqual(state["last_status"], "failed")
         self.assertTrue(state["last_error"])
+
+    def test_codex_model_invocation_honors_reasoning_effort(self):
+        with patch.object(
+            worker, "run_codex", return_value=("{}", "stub")
+        ) as run_codex:
+            worker.invoke_configured_model(
+                "codex-cli",
+                "gpt-5-nano",
+                "prompt",
+                {"reasoning_effort": "low"},
+                self.repo,
+            )
+
+        run_codex.assert_called_once_with(
+            "prompt", "gpt-5-nano", self.repo, "low"
+        )
 
 
 if __name__ == "__main__":

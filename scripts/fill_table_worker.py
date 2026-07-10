@@ -29,10 +29,10 @@ except ImportError:
 
 try:
     from scripts import context_memory_journal as journal
-    from scripts.context_memory_runtime import load_config
+    from scripts.context_memory_runtime import migrate_config_file
 except ImportError:
     import context_memory_journal as journal
-    from context_memory_runtime import load_config
+    from context_memory_runtime import migrate_config_file
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -175,7 +175,9 @@ def run_claude(prompt: str, model: str, budget: float | None, cwd: Path) -> tupl
     return unwrap_claude_stdout(proc.stdout), " ".join(cmd[:-1] + ["<prompt>"])
 
 
-def run_codex(prompt: str, model: str, cwd: Path) -> tuple[str, str]:
+def run_codex(
+    prompt: str, model: str, cwd: Path, reasoning_effort: str | None = None
+) -> tuple[str, str]:
     with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".txt") as tmp:
         output_path = Path(tmp.name)
     cmd = [
@@ -191,6 +193,8 @@ def run_codex(prompt: str, model: str, cwd: Path) -> tuple[str, str]:
         str(output_path),
         "-",
     ]
+    if reasoning_effort:
+        cmd[4:4] = ["-c", f'model_reasoning_effort="{reasoning_effort}"']
     try:
         proc = subprocess.run(cmd, input=prompt, text=True, capture_output=True, encoding="utf-8")
         if proc.returncode != 0:
@@ -205,7 +209,7 @@ def invoke_configured_model(
 ) -> tuple[str, str]:
     if adapter == "claude-code":
         return run_claude(prompt, model, adapter_config.get("max_budget_usd"), cwd)
-    return run_codex(prompt, model, cwd)
+    return run_codex(prompt, model, cwd, adapter_config.get("reasoning_effort"))
 
 
 def _resolve_journal_path(memory_root: Path, config: dict) -> Path:
@@ -255,7 +259,7 @@ def run_worker(
 ) -> dict:
     cwd = Path(cwd)
     memory_root = find_memory_root(cwd)
-    config = load_config(memory_root / "config.yaml")
+    config = migrate_config_file(memory_root / "config.yaml")
     state_path = memory_root / "state.yaml"
     state_text = read_text(state_path)
     schema_text = read_text(memory_root / "schema.yaml")
