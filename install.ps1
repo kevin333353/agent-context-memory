@@ -2,6 +2,7 @@
   [string]$RepoUrl = "https://github.com/kevin333353/agent-context-memory.git",
   [string]$Branch = "main",
   [string]$InstallDir = (Join-Path $env:USERPROFILE ".agent-context-memory"),
+  [string]$AgentUserProfile = $env:USERPROFILE,
   [string]$ProjectDir = "",
   [switch]$NoPath,
   [switch]$NoClaude,
@@ -231,30 +232,39 @@ if (-not $NoPath) {
   Add-UserPath $InstallDir
 }
 
-if (-not $NoClaude -and -not $NoCodex) {
-  Write-Step "安裝 Claude Code 與 Codex hooks"
-  Invoke-ContextMemory @("install", "all")
-} elseif (-not $NoClaude) {
-  Write-Step "安裝 Claude Code hooks"
-  Invoke-ContextMemory @("install", "claude")
-} elseif (-not $NoCodex) {
-  Write-Step "安裝 Codex hooks"
-  Invoke-ContextMemory @("install", "codex")
-} else {
-  Write-Step "略過 agent hooks 安裝"
+if (-not (Test-Path -LiteralPath $AgentUserProfile)) {
+  New-Item -ItemType Directory -Force -Path $AgentUserProfile | Out-Null
 }
-
-$resolvedProject = Resolve-ProjectDir
-if ($resolvedProject) {
-  Write-Step "初始化目前 git 專案：$resolvedProject"
-  Invoke-ContextMemory @("init", "-Cwd", $resolvedProject, "-UpdateGitignore")
-  Invoke-ContextMemory @("validate", "-Cwd", $resolvedProject)
-  if (-not $NoDoctor) {
-    Invoke-ContextMemory @("doctor", "-Cwd", $resolvedProject)
+$originalUserProfile = $env:USERPROFILE
+try {
+  $env:USERPROFILE = $AgentUserProfile
+  if (-not $NoClaude -and -not $NoCodex) {
+    Write-Step "安裝 Claude Code 與 Codex hooks"
+    Invoke-ContextMemory @("install", "all")
+  } elseif (-not $NoClaude) {
+    Write-Step "安裝 Claude Code hooks"
+    Invoke-ContextMemory @("install", "claude")
+  } elseif (-not $NoCodex) {
+    Write-Step "安裝 Codex hooks"
+    Invoke-ContextMemory @("install", "codex")
+  } else {
+    Write-Step "略過 agent hooks 安裝"
   }
-} else {
-  Write-Step "本次初始化專案數：0。已安裝全域工具與 hooks。"
-  Write-Step "第一次進入符合條件的 git repo 時，hook 會自動初始化；也可手動執行 context-memory init -UpdateGitignore。"
+
+  $resolvedProject = Resolve-ProjectDir
+  if ($resolvedProject) {
+    Write-Step "初始化目前 git 專案：$resolvedProject"
+    Invoke-ContextMemory @("init", "-Cwd", $resolvedProject, "-UpdateGitignore")
+    Invoke-ContextMemory @("validate", "-Cwd", $resolvedProject)
+    if (-not $NoDoctor) {
+      Invoke-ContextMemory @("doctor", "-Cwd", $resolvedProject)
+    }
+  } else {
+    Write-Step "本次初始化專案數：0。已安裝全域工具與 hooks。"
+    Write-Step "第一次進入符合條件的 git repo 時，hook 會自動初始化；也可手動執行 context-memory init -UpdateGitignore。"
+  }
+} finally {
+  $env:USERPROFILE = $originalUserProfile
 }
 
 Write-Step "安裝完成。新開 terminal 後可直接使用：context-memory help"
