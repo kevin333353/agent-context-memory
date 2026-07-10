@@ -11,35 +11,27 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
-import shutil
 import sqlite3
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 import yaml
 
+try:
+    from scripts.context_memory_state import (
+        approx_tokens,
+        atomic_write_state,
+        validate_state_yaml,
+    )
+except ImportError:
+    from context_memory_state import approx_tokens, atomic_write_state, validate_state_yaml
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
-
-
-REQUIRED_STATE_KEYS = {
-    "schema_version",
-    "last_updated",
-    "project",
-    "current_focus",
-    "stable_context",
-    "dynamic_context",
-    "open_questions",
-    "decisions",
-    "files",
-    "next_actions",
-}
 
 
 def read_yaml(path: Path) -> dict:
@@ -132,21 +124,6 @@ def build_prompt(state_text: str, schema_text: str, events: list[dict]) -> str:
 {events_text}
 </RECENT_EVENTS>
 """
-
-
-def approx_tokens(text: str) -> int:
-    cjk = len(re.findall(r"[\u3400-\u9fff]", text))
-    return int(cjk + (len(text) - cjk) / 4) + 1
-
-
-def validate_state_yaml(state_yaml: str) -> dict:
-    data = yaml.safe_load(state_yaml)
-    if not isinstance(data, dict):
-        raise ValueError("state_yaml is not a YAML mapping")
-    missing = sorted(REQUIRED_STATE_KEYS - set(data.keys()))
-    if missing:
-        raise ValueError("state_yaml missing keys: " + ", ".join(missing))
-    return data
 
 
 def extract_json_object(text: str) -> dict:
@@ -303,7 +280,8 @@ def main() -> int:
     else:
         if not isinstance(state_yaml, str) or not state_yaml.strip():
             raise ValueError("model JSON missing non-empty state_yaml")
-        validate_state_yaml(state_yaml)
+        token_limit = int(get_nested(config, ["fill_table", "inject_token_limit"], 2000))
+        validate_state_yaml(state_yaml, token_limit)
 
     report["command_preview"] = command_preview
     report["model_notes"] = model_json.get("notes", [])
@@ -312,10 +290,11 @@ def main() -> int:
     report["valid_state_yaml"] = (not no_change)
 
     if args.apply and state_yaml:
-        backup_path = state_path.with_suffix(".yaml.bak-" + datetime.now().strftime("%Y%m%d%H%M%S"))
-        shutil.copy2(state_path, backup_path)
-        state_path.write_text(state_yaml.rstrip() + "\n", encoding="utf-8")
-        report["backup_path"] = str(backup_path)
+        backup_limit = int(get_nested(config, ["fill_table", "backup_limit"], 5))
+        backup_path = atomic_write_state(
+            state_path, state_yaml.rstrip() + "\n", backup_limit
+        )
+        report["backup_path"] = str(backup_path) if backup_path else None
         report["written"] = str(state_path)
     else:
         report["written"] = None
