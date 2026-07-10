@@ -11,13 +11,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sqlite3
+import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-
-import yaml
 
 try:
     from scripts.context_memory_state import (
@@ -28,20 +27,17 @@ try:
 except ImportError:
     from context_memory_state import approx_tokens, atomic_write_state, validate_state_yaml
 
+try:
+    from scripts import context_memory_journal as journal
+    from scripts.context_memory_runtime import load_config
+except ImportError:
+    import context_memory_journal as journal
+    from context_memory_runtime import load_config
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
-
-
-def read_yaml(path: Path) -> dict:
-    if not path.exists():
-        return {}
-    with path.open("r", encoding="utf-8-sig") as f:
-        data = yaml.safe_load(f) or {}
-    if not isinstance(data, dict):
-        raise ValueError(f"{path} must contain a YAML mapping")
-    return data
 
 
 def read_text(path: Path) -> str:
@@ -66,23 +62,6 @@ def get_nested(data: dict, path: list[str], default=None):
             return default
         current = current[part]
     return current
-
-
-def read_events(db_path: Path, limit: int) -> list[dict]:
-    if not db_path.exists():
-        return []
-    with sqlite3.connect(db_path) as con:
-        con.row_factory = sqlite3.Row
-        rows = con.execute(
-            """
-            SELECT id, ts_utc, adapter, event, framework_event, action, prompt, summary
-            FROM events
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-    return [dict(row) for row in reversed(rows)]
 
 
 def build_prompt(state_text: str, schema_text: str, events: list[dict]) -> str:
@@ -221,6 +200,205 @@ def run_codex(prompt: str, model: str, cwd: Path) -> tuple[str, str]:
         output_path.unlink(missing_ok=True)
 
 
+def invoke_configured_model(
+    adapter: str, model: str, prompt: str, adapter_config: dict, cwd: Path
+) -> tuple[str, str]:
+    if adapter == "claude-code":
+        return run_claude(prompt, model, adapter_config.get("max_budget_usd"), cwd)
+    return run_codex(prompt, model, cwd)
+
+
+def _resolve_journal_path(memory_root: Path, config: dict) -> Path:
+    value = str(
+        get_nested(
+            config,
+            ["fill_table", "journal", "path"],
+            ".context-memory/events.sqlite",
+        )
+    )
+    configured = Path(value)
+    if configured.is_absolute():
+        return configured.resolve()
+    return (memory_root.parent / configured).resolve()
+
+
+def _parse_model_result(output_text: str, token_limit: int) -> tuple[dict, str | None]:
+    model_json = extract_json_object(output_text)
+    if bool(model_json.get("no_change")):
+        return model_json, None
+    state_yaml = model_json.get("state_yaml")
+    if not isinstance(state_yaml, str) or not state_yaml.strip():
+        raise ValueError("model JSON missing non-empty state_yaml")
+    validate_state_yaml(state_yaml, token_limit)
+    return model_json, state_yaml
+
+
+def _repair_prompt(prompt: str, error: Exception) -> str:
+    detail = str(error).strip()[:1200]
+    return (
+        prompt
+        + "\n\n<PREVIOUS_OUTPUT_ERROR>\n"
+        + detail
+        + "\n</PREVIOUS_OUTPUT_ERROR>\n"
+        + "Return a corrected JSON object that follows every rule."
+    )
+
+
+def run_worker(
+    cwd: Path,
+    adapter: str,
+    live: bool,
+    apply: bool,
+    invoke_model=None,
+    limit: int = 50,
+    model_override: str | None = None,
+) -> dict:
+    cwd = Path(cwd)
+    memory_root = find_memory_root(cwd)
+    config = load_config(memory_root / "config.yaml")
+    state_path = memory_root / "state.yaml"
+    state_text = read_text(state_path)
+    schema_text = read_text(memory_root / "schema.yaml")
+    journal_path = _resolve_journal_path(memory_root, config)
+    events = journal.read_unprocessed_events(journal_path, limit)
+
+    adapter_config = (
+        get_nested(config, ["fill_table", "adapters", adapter], {}) or {}
+    )
+    routine_model = model_override or adapter_config.get("routine_model")
+    if not routine_model:
+        raise ValueError(f"No routine model configured for adapter {adapter}")
+
+    prompt = build_prompt(state_text, schema_text, events)
+    report = {
+        "mode": "live" if live else "dry-run",
+        "adapter": adapter,
+        "model": routine_model,
+        "memory_root": str(memory_root),
+        "journal_path": str(journal_path),
+        "events": events,
+        "prompt_chars": len(prompt),
+        "prompt_token_estimate": approx_tokens(prompt),
+        "apply": bool(apply),
+    }
+    if not live:
+        report.update(
+            {
+                "status": "dry_run",
+                "prompt_preview": prompt[:2000],
+                "written": None,
+            }
+        )
+        return report
+    if not events:
+        report.update({"status": "no_events", "written": None})
+        return report
+
+    invoke = invoke_model or invoke_configured_model
+    token_limit = int(
+        get_nested(config, ["fill_table", "inject_token_limit"], 2000)
+    )
+    validation_config = (
+        get_nested(config, ["fill_table", "validation"], {}) or {}
+    )
+    attempts = [routine_model]
+    if bool(validation_config.get("retry_same_model_once", True)):
+        attempts.append(routine_model)
+    repair_model = adapter_config.get("repair_model")
+    if (
+        bool(validation_config.get("fallback_on_invalid_yaml", True))
+        and repair_model
+        and repair_model != routine_model
+    ):
+        attempts.append(repair_model)
+
+    last_error = None
+    model_json = None
+    state_yaml = None
+    command_preview = ""
+    used_model = routine_model
+    attempt_prompt = prompt
+    attempted_models = []
+    timestamp = datetime.now(timezone.utc).isoformat()
+    journal.update_worker_state(
+        journal_path,
+        last_attempt_utc=timestamp,
+        last_status="running",
+        last_error="",
+    )
+    for model in attempts:
+        used_model = model
+        attempted_models.append(model)
+        try:
+            output_text, command_preview = invoke(
+                adapter, model, attempt_prompt, adapter_config, memory_root.parent
+            )
+            model_json, state_yaml = _parse_model_result(output_text, token_limit)
+            last_error = None
+            break
+        except Exception as exc:
+            last_error = exc
+            attempt_prompt = _repair_prompt(prompt, exc)
+
+    if last_error is not None or model_json is None:
+        error_text = str(last_error or "model returned no result")[:2000]
+        journal.update_worker_state(
+            journal_path,
+            last_run_utc=datetime.now(timezone.utc).isoformat(),
+            last_status="failed",
+            last_error=error_text,
+            last_model=used_model,
+        )
+        raise ValueError(error_text) from last_error
+
+    event_id = int(events[-1]["id"])
+    no_change = state_yaml is None
+    status = "no_change" if no_change else ("updated" if apply else "preview")
+    backup_path = None
+    written = None
+    if apply and state_yaml:
+        backup_limit = int(
+            get_nested(config, ["fill_table", "backup_limit"], 5)
+        )
+        backup_path = atomic_write_state(
+            state_path, state_yaml.rstrip() + "\n", backup_limit
+        )
+        written = str(state_path)
+
+    if apply:
+        journal.update_worker_state(
+            journal_path,
+            last_processed_event_id=event_id,
+            last_run_utc=datetime.now(timezone.utc).isoformat(),
+            last_status=status,
+            last_error="",
+            last_model=used_model,
+        )
+    else:
+        journal.update_worker_state(
+            journal_path,
+            last_run_utc=datetime.now(timezone.utc).isoformat(),
+            last_status=status,
+            last_error="",
+            last_model=used_model,
+        )
+
+    report.update(
+        {
+            "status": status,
+            "command_preview": command_preview,
+            "attempted_models": attempted_models,
+            "model_notes": model_json.get("notes", []),
+            "no_change": no_change,
+            "state_yaml_chars": len(state_yaml) if state_yaml else 0,
+            "valid_state_yaml": not no_change,
+            "backup_path": str(backup_path) if backup_path else None,
+            "written": written,
+        }
+    )
+    return report
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cwd", default=os.getcwd())
@@ -231,74 +409,14 @@ def main() -> int:
     parser.add_argument("--model")
     args = parser.parse_args()
 
-    cwd = Path(args.cwd)
-    memory_root = find_memory_root(cwd)
-    config = read_yaml(memory_root / "config.yaml")
-    state_path = memory_root / "state.yaml"
-    schema_path = memory_root / "schema.yaml"
-    state_text = read_text(state_path)
-    schema_text = read_text(schema_path)
-
-    journal_path_value = get_nested(config, ["fill_table", "journal", "path"], ".context-memory/events.sqlite")
-    journal_path = (cwd / journal_path_value).resolve()
-    events = read_events(journal_path, args.limit)
-
-    adapter_config = get_nested(config, ["fill_table", "adapters", args.adapter], {}) or {}
-    model = args.model or adapter_config.get("routine_model")
-    if not model:
-        raise ValueError(f"No routine model configured for adapter {args.adapter}")
-
-    prompt = build_prompt(state_text, schema_text, events)
-    report = {
-        "mode": "live" if args.live else "dry-run",
-        "adapter": args.adapter,
-        "model": model,
-        "memory_root": str(memory_root),
-        "journal_path": str(journal_path),
-        "events": events,
-        "prompt_chars": len(prompt),
-        "prompt_token_estimate": approx_tokens(prompt),
-        "apply": bool(args.apply),
-    }
-
-    if not args.live:
-        report["prompt_preview"] = prompt[:2000]
-        print(json.dumps(report, ensure_ascii=False, indent=2))
-        return 0
-
-    if args.adapter == "claude-code":
-        budget = adapter_config.get("max_budget_usd")
-        output_text, command_preview = run_claude(prompt, model, budget, cwd)
-    else:
-        output_text, command_preview = run_codex(prompt, model, cwd)
-
-    model_json = extract_json_object(output_text)
-    no_change = bool(model_json.get("no_change"))
-    state_yaml = model_json.get("state_yaml")
-    if no_change:
-        state_yaml = None
-    else:
-        if not isinstance(state_yaml, str) or not state_yaml.strip():
-            raise ValueError("model JSON missing non-empty state_yaml")
-        token_limit = int(get_nested(config, ["fill_table", "inject_token_limit"], 2000))
-        validate_state_yaml(state_yaml, token_limit)
-
-    report["command_preview"] = command_preview
-    report["model_notes"] = model_json.get("notes", [])
-    report["no_change"] = no_change
-    report["state_yaml_chars"] = len(state_yaml) if state_yaml else 0
-    report["valid_state_yaml"] = (not no_change)
-
-    if args.apply and state_yaml:
-        backup_limit = int(get_nested(config, ["fill_table", "backup_limit"], 5))
-        backup_path = atomic_write_state(
-            state_path, state_yaml.rstrip() + "\n", backup_limit
-        )
-        report["backup_path"] = str(backup_path) if backup_path else None
-        report["written"] = str(state_path)
-    else:
-        report["written"] = None
-
+    report = run_worker(
+        Path(args.cwd),
+        args.adapter,
+        live=args.live,
+        apply=args.apply,
+        limit=args.limit,
+        model_override=args.model,
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
 
