@@ -220,6 +220,40 @@ function New-CodexHookDef {
   }
 }
 
+function Get-ContextMemorySkillPath([string]$TargetName) {
+  switch ($TargetName) {
+    "claude" { return (Join-Path $env:USERPROFILE ".claude\skills\context-memory") }
+    "codex" { return (Join-Path $env:USERPROFILE ".codex\skills\context-memory") }
+    default { throw "Unknown skill target: $TargetName" }
+  }
+}
+
+function Install-ContextMemorySkill([string]$TargetName) {
+  $source = Join-Path $ToolRoot "skills\context-memory"
+  $destination = Get-ContextMemorySkillPath $TargetName
+  $marker = Join-Path $destination ".managed-by-agent-context-memory"
+  if (-not (Test-Path -LiteralPath $source)) {
+    throw "Context-memory skill source not found: $source"
+  }
+  if ((Test-Path -LiteralPath $destination) -and -not (Test-Path -LiteralPath $marker)) {
+    Write-Check "warn" "Existing unmanaged skill was preserved: $destination"
+    return
+  }
+  New-Item -ItemType Directory -Force -Path $destination | Out-Null
+  Copy-Item -Path (Join-Path $source "*") -Destination $destination -Recurse -Force
+  "managed by agent-context-memory" | Set-Content -Encoding UTF8 -LiteralPath $marker
+  Write-Output "Installed managed context-memory skill in $destination"
+}
+
+function Remove-ContextMemorySkill([string]$TargetName) {
+  $destination = Get-ContextMemorySkillPath $TargetName
+  $marker = Join-Path $destination ".managed-by-agent-context-memory"
+  if (Test-Path -LiteralPath $marker) {
+    Remove-Item -LiteralPath $destination -Recurse -Force
+    Write-Output "Removed managed context-memory skill from $destination"
+  }
+}
+
 function Ensure-ProjectMemoryFiles([string]$ProjectRoot) {
   $memoryRoot = Initialize-ContextMemory $ProjectRoot
   $projectPath = Join-Path $memoryRoot "project.yaml"
@@ -361,6 +395,7 @@ function Invoke-InstallCommandFor([string]$TargetName) {
       Set-HookEvent $settings.hooks "SubagentStart" "" $hook
       Set-HookEvent $settings.hooks "PostCompact" "" $hook
       Write-JsonObject $settingsPath $settings
+      Install-ContextMemorySkill "claude"
       Write-Output "Installed Claude Code context-memory hooks in $settingsPath"
     }
     "codex" {
@@ -375,6 +410,7 @@ function Invoke-InstallCommandFor([string]$TargetName) {
       Set-HookEvent $settings.hooks "SubagentStart" "" $hook
       Set-HookEvent $settings.hooks "PostCompact" "" $hook
       Write-JsonObject $settingsPath $settings
+      Install-ContextMemorySkill "codex"
       Write-Output "Installed Codex context-memory hooks in $settingsPath"
     }
     default {
@@ -399,12 +435,14 @@ function Invoke-UninstallCommandFor([string]$TargetName) {
     "claude" {
       $settingsPath = Join-Path $env:USERPROFILE ".claude\settings.json"
       if (-not (Test-Path -LiteralPath $settingsPath)) {
+        Remove-ContextMemorySkill "claude"
         Write-Output "Claude Code settings not found; nothing to uninstall: $settingsPath"
         return
       }
 
       $settings = Read-JsonObject $settingsPath
       if (-not $settings.PSObject.Properties["hooks"]) {
+        Remove-ContextMemorySkill "claude"
         Write-Output "Claude Code hooks not found; nothing to uninstall: $settingsPath"
         return
       }
@@ -421,16 +459,19 @@ function Invoke-UninstallCommandFor([string]$TargetName) {
       } else {
         Write-Output "No Claude Code context-memory hooks found in $settingsPath"
       }
+      Remove-ContextMemorySkill "claude"
     }
     "codex" {
       $settingsPath = Join-Path $env:USERPROFILE ".codex\hooks.json"
       if (-not (Test-Path -LiteralPath $settingsPath)) {
+        Remove-ContextMemorySkill "codex"
         Write-Output "Codex hooks file not found; nothing to uninstall: $settingsPath"
         return
       }
 
       $settings = Read-JsonObject $settingsPath
       if (-not $settings.PSObject.Properties["hooks"]) {
+        Remove-ContextMemorySkill "codex"
         Write-Output "Codex hooks not found; nothing to uninstall: $settingsPath"
         return
       }
@@ -446,6 +487,7 @@ function Invoke-UninstallCommandFor([string]$TargetName) {
       } else {
         Write-Output "No Codex context-memory hooks found in $settingsPath"
       }
+      Remove-ContextMemorySkill "codex"
     }
     default {
       throw "Unknown uninstall target: $TargetName. Use claude, codex, or all."
@@ -487,9 +529,23 @@ function Invoke-ValidateCommand {
       Write-Check "pass" "state.yaml is about $tokens tokens"
     }
 
-    foreach ($key in @("schema_version:", "project:", "current_focus:", "stable_context:", "dynamic_context:", "open_questions:", "decisions:", "files:", "next_actions:")) {
-      if ($state -notmatch "(?m)^$([regex]::Escape($key))") {
-        Write-Check "fail" "state.yaml missing top-level key $key"
+    $pythonPath = Get-ContextMemoryPythonPath
+    $validationScript = Join-Path $ToolRoot "scripts\context_memory_state.py"
+    if (-not $pythonPath -or -not (Test-Path -LiteralPath $validationScript)) {
+      Write-Check "fail" "Structured validator runtime is unavailable"
+      $failures++
+    } else {
+      $validationOutput = & $pythonPath $validationScript validate --path $statePath --token-limit $TokenLimit 2>&1 | Out-String
+      try {
+        $validation = $validationOutput | ConvertFrom-Json
+        if ($LASTEXITCODE -eq 0 -and $validation.valid) {
+          Write-Check "pass" "state.yaml structured validation passed"
+        } else {
+          Write-Check "fail" "state.yaml structured validation failed: $($validation.error)"
+          $failures++
+        }
+      } catch {
+        Write-Check "fail" "state.yaml validator returned invalid output"
         $failures++
       }
     }
@@ -550,8 +606,73 @@ function Invoke-DoctorCommand {
   Write-Output "context-memory doctor"
   Write-Output "Project root: $projectRoot"
 
+  $managedPythonPath = Join-Path $ToolRoot ".venv\Scripts\python.exe"
+  if (Test-Path -LiteralPath $managedPythonPath) {
+    Write-Check "pass" "Managed Python runtime: $managedPythonPath"
+  } else {
+    Write-Check "warn" "Managed Python runtime missing; using source-checkout fallback"
+    $warnings++
+  }
+  $pythonPath = Get-ContextMemoryPythonPath
+  if ($pythonPath) {
+    $null = & $pythonPath -c "import yaml" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      Write-Check "pass" "PyYAML is available"
+    } else {
+      Write-Check "fail" "PyYAML is unavailable in $pythonPath"
+      $failures++
+    }
+  } else {
+    Write-Check "fail" "No usable Python runtime found"
+    $failures++
+  }
+
   if ($memoryRoot) {
     Write-Check "pass" "Memory root found: $memoryRoot"
+    $metadataPath = Join-Path $memoryRoot "metadata.json"
+    if (Test-Path -LiteralPath $metadataPath) {
+      try {
+        $metadata = Get-Content -Raw -Encoding UTF8 -LiteralPath $metadataPath | ConvertFrom-Json
+        Write-Check "pass" "Initialization origin: $($metadata.initialization_origin)"
+      } catch {
+        Write-Check "warn" "Initialization metadata is invalid"
+        $warnings++
+      }
+    } else {
+      Write-Check "warn" "Initialization origin: legacy_or_unknown"
+      $warnings++
+    }
+
+    $journalPath = Join-Path $memoryRoot "events.sqlite"
+    $journalScript = Join-Path $ToolRoot "scripts\context_memory_journal.py"
+    if ($pythonPath -and (Test-Path -LiteralPath $journalScript) -and (Test-Path -LiteralPath $journalPath)) {
+      try {
+        $workerOutput = & $pythonPath $journalScript --db $journalPath --status 2>&1 | Out-String
+        $worker = $workerOutput | ConvertFrom-Json
+        Write-Check "pass" "Worker status: $($worker.last_status); cursor: $($worker.last_processed_event_id); model: $($worker.last_model)"
+        if ($worker.last_error) {
+          Write-Check "warn" "Worker error: $($worker.last_error)"
+          $warnings++
+        }
+      } catch {
+        Write-Check "fail" "Worker status is unreadable"
+        $failures++
+      }
+    } else {
+      Write-Check "warn" "Worker status: journal_not_ready"
+      $warnings++
+    }
+
+    foreach ($lockName in @("worker.lock", "init.lock")) {
+      $lockPath = Join-Path $memoryRoot $lockName
+      if (Test-Path -LiteralPath $lockPath) {
+        $ageMinutes = ((Get-Date) - (Get-Item -LiteralPath $lockPath).LastWriteTime).TotalMinutes
+        if ($ageMinutes -gt 10) {
+          Write-Check "warn" "Stale lock detected: $lockPath"
+          $warnings++
+        }
+      }
+    }
   } else {
     Write-Check "fail" "No .context-memory/state.yaml found"
     $failures++

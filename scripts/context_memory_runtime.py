@@ -307,10 +307,29 @@ def main() -> int:
     auto_parser = subparsers.add_parser("auto-init")
     auto_parser.add_argument("--cwd", required=True)
     auto_parser.add_argument("--tool-root", required=True)
+    init_parser = subparsers.add_parser("init")
+    init_parser.add_argument("--project-root", required=True)
+    init_parser.add_argument("--tool-root", required=True)
+    init_parser.add_argument("--origin", default="manual")
+    init_parser.add_argument("--update-gitignore", action="store_true")
     args = parser.parse_args()
     if args.command == "auto-init":
         result = auto_initialize(Path(args.cwd), Path(args.tool_root))
         print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+    else:
+        memory_root = initialize_memory(
+            Path(args.project_root),
+            Path(args.tool_root),
+            update_gitignore=bool(args.update_gitignore),
+            origin=args.origin,
+        )
+        print(
+            json.dumps(
+                {"initialized": True, "memory_root": str(memory_root)},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
     return 0
 
 

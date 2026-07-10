@@ -283,7 +283,18 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", required=True)
     parser.add_argument("--event-b64")
+    parser.add_argument("--status", action="store_true")
     args = parser.parse_args()
+
+    if args.status:
+        print(
+            json.dumps(
+                get_worker_state(Path(args.db)),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+        return 0
 
     if args.event_b64:
         raw = base64.b64decode(args.event_b64).decode("utf-8")

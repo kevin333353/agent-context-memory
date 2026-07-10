@@ -144,6 +144,22 @@ function Invoke-ContextMemoryAutoInit([string]$cwd) {
 }
 
 function Initialize-ContextMemory([string]$cwd) {
+  $pythonPath = Get-ContextMemoryPythonPath
+  $runtimeScript = Join-Path $script:ContextMemoryCoreRoot "scripts\context_memory_runtime.py"
+  if ($pythonPath -and (Test-Path -LiteralPath $runtimeScript)) {
+    try {
+      $runtimeOutput = & $pythonPath $runtimeScript init --project-root $cwd --tool-root $script:ContextMemoryCoreRoot --origin manual 2>&1 | Out-String
+      if ($LASTEXITCODE -eq 0) {
+        $runtimeResult = $runtimeOutput | ConvertFrom-Json
+        if ($runtimeResult.memory_root) {
+          return [string]$runtimeResult.memory_root
+        }
+      }
+      Write-ContextMemoryDiagnostic $null "structured init failed; using PowerShell fallback"
+    } catch {
+      Write-ContextMemoryDiagnostic $null "structured init failed; using PowerShell fallback"
+    }
+  }
   $memoryRoot = Join-Path $cwd ".context-memory"
   New-Item -ItemType Directory -Force -Path $memoryRoot | Out-Null
 
@@ -257,20 +273,29 @@ Keep handoffs short and actionable:
   if (-not (Test-Path -LiteralPath $configPath)) {
     @"
 schema_version: 1
+auto_init:
+  enabled: true
+  update_gitignore: true
+  exclude_temp_roots: true
 fill_table:
   enabled: true
   update_mode: "background_summarizer"
   summary_interval_turns: 3
   inject_token_limit: 2000
+  backup_limit: 5
+  retry_cooldown_seconds: 300
   worker:
-    auto_run: false
-    status: "not_installed"
-    note: "Hooks record events only. Add a background worker before automatically rewriting state.yaml."
+    auto_run: true
+    status: "managed"
+    note: "Hooks launch the managed background worker after the event threshold."
   journal:
     enabled: true
     path: ".context-memory/events.sqlite"
+    capture_prompts: true
     store_full_payload: false
     max_prompt_chars: 8000
+    max_event_age_days: 7
+    max_event_count: 500
   validation:
     require_valid_yaml: true
     retry_same_model_once: true

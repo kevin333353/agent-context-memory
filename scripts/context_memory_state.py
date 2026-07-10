@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import math
 import os
 import re
@@ -107,3 +109,34 @@ def atomic_write_state(
 
     _prune_backups(path, backup_limit)
     return backup_path
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    validate_parser = subparsers.add_parser("validate")
+    validate_parser.add_argument("--path", required=True)
+    validate_parser.add_argument("--token-limit", type=int, default=2000)
+    args = parser.parse_args()
+
+    if args.command == "validate":
+        path = Path(args.path)
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+            validate_state_yaml(text, args.token_limit)
+            result = {
+                "valid": True,
+                "tokens": approx_tokens(text),
+                "error": "",
+            }
+            exit_code = 0
+        except (OSError, ValueError) as exc:
+            result = {"valid": False, "tokens": 0, "error": str(exc)}
+            exit_code = 1
+        print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+        return exit_code
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

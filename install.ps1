@@ -7,7 +7,8 @@
   [switch]$NoClaude,
   [switch]$NoCodex,
   [switch]$NoProjectInit,
-  [switch]$NoDoctor
+  [switch]$NoDoctor,
+  [switch]$SkipRepositorySync
 )
 
 $ErrorActionPreference = "Stop"
@@ -144,6 +145,42 @@ function Install-Repository {
   }
 }
 
+function Install-ManagedPython {
+  if (-not (Test-CommandExists "python")) {
+    throw "找不到 Python。Agent Context Memory v0.2.0 需要 Python 3.9 以上。"
+  }
+  $python = (Get-Command python -CommandType Application).Source
+  & $python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)"
+  if ($LASTEXITCODE -ne 0) {
+    throw "Python 版本過舊。Agent Context Memory v0.2.0 需要 Python 3.9 以上。"
+  }
+
+  $venvRoot = Join-Path $InstallDir ".venv"
+  $managedPython = Join-Path $venvRoot "Scripts\python.exe"
+  if (-not (Test-Path -LiteralPath $managedPython)) {
+    Write-Step "建立工具專用 Python virtual environment"
+    & $python -m venv $venvRoot
+    if ($LASTEXITCODE -ne 0) {
+      throw "建立 Python virtual environment 失敗：$venvRoot"
+    }
+  }
+
+  $requirements = Join-Path $InstallDir "requirements.txt"
+  if (-not (Test-Path -LiteralPath $requirements)) {
+    throw "找不到 Python dependencies：$requirements"
+  }
+  Write-Step "安裝固定版本 Python dependencies"
+  & $managedPython -m pip install --quiet --disable-pip-version-check -r $requirements
+  if ($LASTEXITCODE -ne 0) {
+    throw "安裝 Python dependencies 失敗。"
+  }
+  & $managedPython -c "import yaml"
+  if ($LASTEXITCODE -ne 0) {
+    throw "Managed Python 無法載入 PyYAML。"
+  }
+  Write-Step "Managed Python ready：$managedPython"
+}
+
 function Invoke-ContextMemory([string[]]$CliArgs) {
   $cli = Join-Path $InstallDir "context-memory.ps1"
   if (-not (Test-Path -LiteralPath $cli)) {
@@ -180,7 +217,15 @@ function Resolve-ProjectDir {
 }
 
 Write-Step "開始安裝 Agent Context Memory"
-Install-Repository
+if ($SkipRepositorySync) {
+  if (-not (Test-Path -LiteralPath (Join-Path $InstallDir "context-memory.ps1"))) {
+    throw "SkipRepositorySync 需要既有工具 source checkout：$InstallDir"
+  }
+  Write-Step "略過 repository 同步，使用既有 source checkout：$InstallDir"
+} else {
+  Install-Repository
+}
+Install-ManagedPython
 
 if (-not $NoPath) {
   Add-UserPath $InstallDir
