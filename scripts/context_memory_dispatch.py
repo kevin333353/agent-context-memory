@@ -19,11 +19,17 @@ try:
         exclusive_lock,
         managed_python,
         migrate_config_file,
+        resolve_journal_path,
     )
 except ImportError:
     import context_memory_journal as journal
     import fill_table_worker
-    from context_memory_runtime import exclusive_lock, managed_python, migrate_config_file
+    from context_memory_runtime import (
+        exclusive_lock,
+        managed_python,
+        migrate_config_file,
+        resolve_journal_path,
+    )
 
 
 def _parse_utc(value: str) -> datetime | None:
@@ -90,7 +96,17 @@ def record_and_maybe_dispatch(
     launch_worker=None,
 ) -> dict:
     memory_root = memory_root.resolve()
-    db_path = memory_root / "events.sqlite"
+    fill_config = config.get("fill_table", {}) or {}
+    journal_config = fill_config.get("journal", {}) or {}
+    if not bool(journal_config.get("enabled", True)):
+        return {
+            "journaled": False,
+            "event_id": None,
+            "dispatch_due": False,
+            "worker_started": False,
+            "dispatch_reason": "journal_disabled",
+        }
+    db_path = resolve_journal_path(memory_root, config)
     event_id = journal.append_event(db_path, event, config)
     result = {
         "journaled": True,
@@ -100,7 +116,9 @@ def record_and_maybe_dispatch(
         "dispatch_reason": "below_threshold",
     }
 
-    fill_config = config.get("fill_table", {}) or {}
+    if not bool(fill_config.get("enabled", True)):
+        result["dispatch_reason"] = "fill_table_disabled"
+        return result
     worker_config = fill_config.get("worker", {}) or {}
     if not bool(worker_config.get("auto_run", False)):
         result["dispatch_reason"] = "auto_run_disabled"

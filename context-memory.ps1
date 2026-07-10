@@ -325,7 +325,11 @@ function Update-ContextMemoryGitignore([string]$ProjectRoot) {
 .context-memory/history.md
 .context-memory/last-compact.md
 .context-memory/events.sqlite
+.context-memory/metadata.json
+.context-memory/diagnostics.log
+.context-memory/*.lock
 .context-memory/*.tmp
+.context-memory/*.bak-*
 "@
 
   $existing = ""
@@ -644,6 +648,15 @@ function Invoke-DoctorCommand {
     }
 
     $journalPath = Join-Path $memoryRoot "events.sqlite"
+    $runtimeScript = Join-Path $ToolRoot "scripts\context_memory_runtime.py"
+    if ($pythonPath -and (Test-Path -LiteralPath $runtimeScript)) {
+      try {
+        $resolvedJournal = & $pythonPath $runtimeScript journal-path --memory-root $memoryRoot 2>$null | Out-String
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($resolvedJournal)) {
+          $journalPath = $resolvedJournal.Trim()
+        }
+      } catch {}
+    }
     $journalScript = Join-Path $ToolRoot "scripts\context_memory_journal.py"
     if ($pythonPath -and (Test-Path -LiteralPath $journalScript)) {
       try {

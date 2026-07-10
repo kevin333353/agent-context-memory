@@ -205,7 +205,9 @@ def is_auto_init_eligible(
 
 
 @contextmanager
-def exclusive_lock(path: Path, timeout_seconds: float = 5.0) -> Iterator[None]:
+def exclusive_lock(
+    path: Path, timeout_seconds: float = 5.0, stale_after_seconds: float = 600.0
+) -> Iterator[None]:
     deadline = time.monotonic() + timeout_seconds
     descriptor = None
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -214,6 +216,13 @@ def exclusive_lock(path: Path, timeout_seconds: float = 5.0) -> Iterator[None]:
             descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.write(descriptor, str(os.getpid()).encode("ascii"))
         except FileExistsError:
+            try:
+                age = time.time() - path.stat().st_mtime
+                if age > stale_after_seconds:
+                    path.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"Timed out waiting for lock {path}")
             time.sleep(0.05)
@@ -311,6 +320,18 @@ def managed_python(tool_root: Path) -> Path | None:
     return next((candidate for candidate in candidates if candidate.is_file()), None)
 
 
+def resolve_journal_path(memory_root: Path, config: dict) -> Path:
+    value = str(
+        config.get("fill_table", {})
+        .get("journal", {})
+        .get("path", ".context-memory/events.sqlite")
+    )
+    configured = Path(value)
+    if configured.is_absolute():
+        return configured.resolve()
+    return (memory_root.parent / configured).resolve()
+
+
 def read_valid_state(memory_root: Path) -> dict:
     config = load_config(memory_root / "config.yaml")
     token_limit = int(config.get("fill_table", {}).get("inject_token_limit") or 2000)
@@ -363,6 +384,8 @@ def main() -> int:
     init_parser.add_argument("--update-gitignore", action="store_true")
     read_parser = subparsers.add_parser("read-state")
     read_parser.add_argument("--memory-root", required=True)
+    journal_parser = subparsers.add_parser("journal-path")
+    journal_parser.add_argument("--memory-root", required=True)
     args = parser.parse_args()
     if args.command == "auto-init":
         result = auto_initialize(Path(args.cwd), Path(args.tool_root))
@@ -381,7 +404,7 @@ def main() -> int:
                 separators=(",", ":"),
             )
         )
-    else:
+    elif args.command == "read-state":
         print(
             json.dumps(
                 read_valid_state(Path(args.memory_root)),
@@ -389,6 +412,10 @@ def main() -> int:
                 separators=(",", ":"),
             )
         )
+    else:
+        memory_root = Path(args.memory_root)
+        config = load_config(memory_root / "config.yaml")
+        print(str(resolve_journal_path(memory_root, config)))
     return 0
 
 

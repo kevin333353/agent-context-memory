@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -145,6 +146,18 @@ fill_table:
             migrated["fill_table"]["adapters"]["codex-cli"]["routine_model"],
             "custom-routine",
         )
+
+    def test_exclusive_lock_recovers_stale_file(self):
+        self.require_runtime()
+        lock_path = self.root / "stale.lock"
+        lock_path.write_text("123", encoding="ascii")
+        stale_time = lock_path.stat().st_mtime - 700
+        os.utime(lock_path, (stale_time, stale_time))
+
+        with runtime.exclusive_lock(lock_path, timeout_seconds=0.2):
+            self.assertTrue(lock_path.exists())
+
+        self.assertFalse(lock_path.exists())
 
 
 if __name__ == "__main__":

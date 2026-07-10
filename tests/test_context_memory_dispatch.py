@@ -103,6 +103,57 @@ class ContextMemoryDispatchTests(unittest.TestCase):
         self.assertFalse(result["worker_started"])
         self.assertEqual(result["dispatch_reason"], "disabled_env")
 
+    def test_disabled_journal_records_nothing(self):
+        self.require_dispatch()
+        self.config["fill_table"]["journal"]["enabled"] = False
+
+        result = dispatch.record_and_maybe_dispatch(
+            self.memory_root,
+            "codex-cli",
+            self.event(),
+            self.config,
+            TOOL_ROOT,
+            lambda *args: self.fail("worker should not launch"),
+        )
+
+        self.assertFalse(result["journaled"])
+        self.assertEqual(result["dispatch_reason"], "journal_disabled")
+        self.assertFalse((self.memory_root / "events.sqlite").exists())
+
+    def test_disabled_fill_table_journals_without_dispatch(self):
+        self.require_dispatch()
+        self.config["fill_table"]["enabled"] = False
+
+        result = dispatch.record_and_maybe_dispatch(
+            self.memory_root,
+            "codex-cli",
+            self.event(),
+            self.config,
+            TOOL_ROOT,
+            lambda *args: self.fail("worker should not launch"),
+        )
+
+        self.assertTrue(result["journaled"])
+        self.assertEqual(result["dispatch_reason"], "fill_table_disabled")
+
+    def test_custom_journal_path_is_honored(self):
+        self.require_dispatch()
+        self.config["fill_table"]["journal"]["path"] = ".cache/context-memory.sqlite"
+
+        result = dispatch.record_and_maybe_dispatch(
+            self.memory_root,
+            "codex-cli",
+            self.event(),
+            self.config,
+            TOOL_ROOT,
+            lambda *args: True,
+        )
+
+        expected = self.repo / ".cache" / "context-memory.sqlite"
+        self.assertTrue(result["journaled"])
+        self.assertTrue(expected.exists())
+        self.assertFalse((self.memory_root / "events.sqlite").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

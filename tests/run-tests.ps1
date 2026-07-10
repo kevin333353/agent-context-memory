@@ -147,6 +147,9 @@ try {
   Assert-True ($cliVersion.Stdout.Trim() -eq "0.2.0") "cli version did not report 0.2.0"
   $gitignoreText = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $TempRoot ".gitignore")
   Assert-True ($gitignoreText.Contains("!.context-memory/schema.yaml")) "cli init did not add team-safe gitignore rules"
+  Assert-True ($gitignoreText.Contains(".context-memory/metadata.json")) "cli init did not ignore local metadata"
+  Assert-True ($gitignoreText.Contains(".context-memory/diagnostics.log")) "cli init did not ignore diagnostics"
+  Assert-True ($gitignoreText.Contains(".context-memory/*.bak-*")) "cli init did not ignore state backups"
 
   $cliValidate = Invoke-Cli "validate" "-Cwd" $TempRoot
   Assert-True ($cliValidate.ExitCode -eq 0) "cli validate exited $($cliValidate.ExitCode): $($cliValidate.Stdout)"
