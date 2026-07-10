@@ -317,6 +317,9 @@ fill_table:
 }
 
 function Write-ContextMemoryJournal($inputObj, [string]$memoryRoot, [string]$event, [string]$frameworkEvent, [string]$cwd, [string]$adapterName, [string]$action) {
+  if ($env:CONTEXT_MEMORY_DISABLE_JOURNAL -eq "1") {
+    return $false
+  }
   if (-not $memoryRoot) {
     return $false
   }
@@ -457,6 +460,18 @@ function Invoke-ContextMemoryProtocol {
 
   $stdin = Read-ContextMemoryInput $InputRaw
   $inputObj = $stdin.obj
+  if ([string]::IsNullOrWhiteSpace($stdin.raw) -and $Mode -in @("auto", "inject")) {
+    return @{
+      protocol = "context-memory/v1"
+      action = "none"
+      event = "empty_input"
+      framework_event = ""
+      cwd = (Get-Location).Path
+      memory_root = $null
+      context = $null
+      journaled = $false
+    }
+  }
   if (-not [string]::IsNullOrWhiteSpace($stdin.raw) -and -not $inputObj) {
     Write-ContextMemoryDiagnostic $null "invalid hook input JSON; injection skipped"
     return @{

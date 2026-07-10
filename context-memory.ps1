@@ -631,6 +631,10 @@ function Invoke-DoctorCommand {
     $failures++
   }
 
+  $oldDisableDoctorJournal = $env:CONTEXT_MEMORY_DISABLE_JOURNAL
+  $oldDisableDoctorDispatch = $env:CONTEXT_MEMORY_DISABLE_WORKER_DISPATCH
+  $env:CONTEXT_MEMORY_DISABLE_JOURNAL = "1"
+  $env:CONTEXT_MEMORY_DISABLE_WORKER_DISPATCH = "1"
   if ($memoryRoot) {
     Write-Check "pass" "Memory root found: $memoryRoot"
     $metadataPath = Join-Path $memoryRoot "metadata.json"
@@ -828,6 +832,8 @@ function Invoke-DoctorCommand {
       $failures++
     }
   }
+  $env:CONTEXT_MEMORY_DISABLE_JOURNAL = $oldDisableDoctorJournal
+  $env:CONTEXT_MEMORY_DISABLE_WORKER_DISPATCH = $oldDisableDoctorDispatch
 
   if ($failures -gt 0) {
     Write-Output "Doctor failed: $failures failure(s), $warnings warning(s)."

@@ -293,6 +293,12 @@ def run_worker(
         )
         return report
     if not events:
+        journal.update_worker_state(
+            journal_path,
+            last_run_utc=datetime.now(timezone.utc).isoformat(),
+            last_status="no_events",
+            last_error="",
+        )
         report.update({"status": "no_events", "written": None})
         return report
 

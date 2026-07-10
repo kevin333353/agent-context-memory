@@ -118,6 +118,16 @@ try {
   Assert-True ($invalidHookJson.action -eq "none") "invalid hook input should fail open without injection"
   Assert-True (-not (Test-Path -LiteralPath (Join-Path $invalidRepo ".context-memory"))) "invalid hook input triggered auto-init"
 
+  try {
+    $env:CLAUDE_PROJECT_DIR = $invalidRepo
+    $emptyHook = Invoke-Hook "" @("-Adapter", "generic-json")
+  } finally {
+    $env:CLAUDE_PROJECT_DIR = $oldClaudeProjectDir
+  }
+  $emptyHookJson = $emptyHook.Stdout | ConvertFrom-Json
+  Assert-True ($emptyHookJson.action -eq "none") "empty hook input should fail open without injection"
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $invalidRepo ".context-memory"))) "empty hook input triggered auto-init"
+
   $autoStatePath = Join-Path $autoRepo ".context-memory\state.yaml"
   $autoStateOriginal = Get-Content -Raw -Encoding UTF8 -LiteralPath $autoStatePath
   $oversizedLine = "  - `"" + ("x" * 12000) + "`""
@@ -239,10 +249,13 @@ try {
     $codexSessionMatcher = [string]$codexHooks.hooks.SessionStart[0].matcher
     Assert-True ($codexSessionMatcher -eq "startup|resume|clear|compact") "codex SessionStart matcher did not cover every documented source"
 
+    $eventsBeforeDoctor = & $countEvents $autoJournalPath
     $doctor = Invoke-Cli "doctor" "-Cwd" $autoRepo
+    $eventsAfterDoctor = & $countEvents $autoJournalPath
     Assert-True ($doctor.ExitCode -eq 0) "doctor exited $($doctor.ExitCode): $($doctor.Stdout)"
     Assert-True ($doctor.Stdout.Contains("Initialization origin: hook_auto")) "doctor did not report auto-init origin"
     Assert-True ($doctor.Stdout.Contains("Worker status:")) "doctor did not report worker state"
+    Assert-True ($eventsAfterDoctor -eq $eventsBeforeDoctor) "doctor smoke tests polluted the event journal"
 
     $uninstallHooks = Invoke-Cli "uninstall" "all"
     Assert-True ($uninstallHooks.ExitCode -eq 0) "cli uninstall all exited $($uninstallHooks.ExitCode): $($uninstallHooks.Stdout)"

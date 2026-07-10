@@ -104,6 +104,22 @@ class FillTableWorkerTests(unittest.TestCase):
             journal.get_worker_state(self.db)["last_processed_event_id"], event_id
         )
 
+    def test_no_events_clears_queued_worker_status(self):
+        event_id = journal.read_unprocessed_events(self.db, 10)[-1]["id"]
+        journal.update_worker_state(
+            self.db,
+            last_processed_event_id=event_id,
+            last_status="queued",
+            last_attempt_utc="2026-07-11T00:00:00+00:00",
+        )
+
+        report = worker.run_worker(
+            self.repo, "codex-cli", live=True, apply=True
+        )
+
+        self.assertEqual(report["status"], "no_events")
+        self.assertEqual(journal.get_worker_state(self.db)["last_status"], "no_events")
+
     def test_failed_attempt_does_not_advance_cursor(self):
         before = journal.get_worker_state(self.db)["last_processed_event_id"]
 
