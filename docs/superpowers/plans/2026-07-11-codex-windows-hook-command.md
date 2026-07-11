@@ -41,7 +41,12 @@ $codexEffectiveCommand = if ([string]::IsNullOrWhiteSpace($codexWindowsCommand))
 } else {
   $codexWindowsCommand
 }
-$codexHookOutput = $sessionPayload | & $env:ComSpec /D /S /C $codexEffectiveCommand 2>&1 | Out-String
+$toolRepoSessionPayload = @{
+  cwd = $Root
+  hook_event_name = "SessionStart"
+  source = "startup"
+} | ConvertTo-Json -Compress
+$codexHookOutput = $toolRepoSessionPayload | & $env:ComSpec /D /S /C $codexEffectiveCommand 2>&1 | Out-String
 $codexHookExitCode = $LASTEXITCODE
 Assert-True ($codexHookExitCode -eq 0) "Codex Windows hook command exited ${codexHookExitCode}: $codexHookOutput"
 Assert-True (-not [string]::IsNullOrWhiteSpace($codexWindowsCommand)) "Codex hook did not define commandWindows"
