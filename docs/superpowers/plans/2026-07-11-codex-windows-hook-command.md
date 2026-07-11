@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make Agent Context Memory Codex hooks complete successfully when Codex CLI 0.144.1 launches them through `cmd.exe /C` on Windows.
+**Goal:** Make Agent Context Memory Codex hooks complete successfully when Codex CLI 0.144.1 launches them through `cmd.exe /C` or a PowerShell session environment on Windows.
 
-**Architecture:** Generate a quote-free outer Windows command that invokes Windows PowerShell with a UTF-16LE Base64 `-EncodedCommand`. Store it in both `command` and the official `commandWindows` override so current and older Windows Codex hook loaders use the same safe launcher.
+**Architecture:** Generate a quote-free outer Windows command that invokes `powershell.exe` with a UTF-16LE Base64 `-EncodedCommand`. Store it in both `command` and the official `commandWindows` override so current and older Windows Codex hook loaders use the same launcher in either `cmd.exe` or PowerShell environments. Keep the managed-hook marker in `statusMessage` for update and uninstall detection.
 
 **Tech Stack:** Windows PowerShell 5.1, Codex `hooks.json`, `cmd.exe`, PowerShell protocol tests, Codex app-server JSON-RPC.
 
@@ -74,11 +74,12 @@ function New-CodexHookDef {
   $escapedHookPath = $hookPath.Replace("'", "''")
   $scriptText = "`$ProgressPreference = 'SilentlyContinue'; & '$escapedHookPath' -Adapter 'codex-cli'"
   $encodedScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptText))
-  $launcher = "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encodedScript"
+  $launcher = "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encodedScript"
   return [pscustomobject][ordered]@{
     type = "command"
     command = $launcher
     commandWindows = $launcher
+    statusMessage = "Loading Agent Context Memory (context-memory-hook.ps1)"
   }
 }
 ```

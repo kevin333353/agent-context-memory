@@ -23,15 +23,18 @@ required by Windows PowerShell. Its decoded script will:
 3. pass `-Adapter codex-cli`;
 4. leave stdin attached so the hook can read Codex's JSON payload.
 
-The outer command will contain no quoted paths:
+The outer command will contain no quoted paths and will be valid in both the
+`cmd.exe` fallback and a PowerShell session environment:
 
 ```text
-%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe ... -EncodedCommand <base64>
+powershell.exe ... -EncodedCommand <base64>
 ```
 
 This avoids `cmd.exe` quote corruption and continues to support tool paths
-that contain spaces. The existing `command` field remains as a compatibility
-fallback, while Codex on Windows selects `commandWindows`.
+that contain spaces. The same launcher is stored in `command` as a
+compatibility fallback and in `commandWindows` as the official Windows
+override. A unique `statusMessage` retains the plaintext managed-hook marker
+needed for idempotent update and uninstall behavior.
 
 ## Alternatives Rejected
 
@@ -48,6 +51,7 @@ the same boundary used by Codex:
 
 ```text
 cmd.exe /D /S /C <commandWindows>
+powershell.exe -Command <commandWindows>
 ```
 
 The test sends a valid `SessionStart` JSON object on stdin and requires exit

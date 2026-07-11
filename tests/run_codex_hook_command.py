@@ -3,24 +3,38 @@ import os
 import subprocess
 
 
-result = subprocess.run(
-    [
-        os.environ["ComSpec"],
-        "/D",
-        "/S",
-        "/C",
-        os.environ["CONTEXT_MEMORY_TEST_CODEX_COMMAND"],
-    ],
-    input=os.environ["CONTEXT_MEMORY_TEST_CODEX_PAYLOAD"],
-    text=True,
-    capture_output=True,
+command = os.environ["CONTEXT_MEMORY_TEST_CODEX_COMMAND"]
+payload = os.environ["CONTEXT_MEMORY_TEST_CODEX_PAYLOAD"]
+powershell = os.path.join(
+    os.environ["SystemRoot"],
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
 )
+
+
+def run(argv):
+    result = subprocess.run(
+        argv,
+        input=payload,
+        text=True,
+        capture_output=True,
+    )
+    return {
+        "exit_code": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+
+
 print(
     json.dumps(
         {
-            "exit_code": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "cmd": run([os.environ["ComSpec"], "/D", "/S", "/C", command]),
+            "powershell": run(
+                [powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
+            ),
         }
     )
 )

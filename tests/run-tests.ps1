@@ -260,13 +260,16 @@ try {
     $env:CONTEXT_MEMORY_TEST_CODEX_COMMAND = $codexEffectiveCommand
     $env:CONTEXT_MEMORY_TEST_CODEX_PAYLOAD = $toolRepoSessionPayload
     $codexRunner = Join-Path $PSScriptRoot "run_codex_hook_command.py"
-    $codexHookResult = (& $managedPython $codexRunner | Out-String) | ConvertFrom-Json
+    $codexHookResults = (& $managedPython $codexRunner | Out-String) | ConvertFrom-Json
     Remove-Item Env:CONTEXT_MEMORY_TEST_CODEX_COMMAND -ErrorAction SilentlyContinue
     Remove-Item Env:CONTEXT_MEMORY_TEST_CODEX_PAYLOAD -ErrorAction SilentlyContinue
-    Assert-True ([int]$codexHookResult.exit_code -eq 0) "Codex Windows hook command exited $($codexHookResult.exit_code): $($codexHookResult.stderr)"
+    foreach ($runnerName in @("cmd", "powershell")) {
+      $codexHookResult = $codexHookResults.$runnerName
+      Assert-True ([int]$codexHookResult.exit_code -eq 0) "Codex Windows hook command failed in ${runnerName} with exit $($codexHookResult.exit_code): $($codexHookResult.stderr)"
+      Assert-True ([string]::IsNullOrWhiteSpace([string]$codexHookResult.stdout)) "Codex ineligible-repo SessionStart should emit no output in $runnerName"
+      Assert-True ([string]::IsNullOrWhiteSpace([string]$codexHookResult.stderr)) "Codex ineligible-repo SessionStart should emit no stderr in $runnerName"
+    }
     Assert-True (-not [string]::IsNullOrWhiteSpace($codexWindowsCommand)) "Codex hook did not define commandWindows"
-    Assert-True ([string]::IsNullOrWhiteSpace([string]$codexHookResult.stdout)) "Codex ineligible-repo SessionStart should emit no output"
-    Assert-True ([string]::IsNullOrWhiteSpace([string]$codexHookResult.stderr)) "Codex ineligible-repo SessionStart should emit no stderr"
     $codexSessionMatcher = [string]$codexHooks.hooks.SessionStart[0].matcher
     Assert-True ($codexSessionMatcher -eq "startup|resume|clear|compact") "codex SessionStart matcher did not cover every documented source"
 
