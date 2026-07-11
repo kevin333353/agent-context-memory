@@ -138,11 +138,11 @@ Run:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\run-tests.ps1
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
-rg -n "v0\.2\.0|0\.2\.0" README.md install.ps1 VERSION tests/run-tests.ps1
+Select-String -Path README.md,install.ps1,VERSION,tests/run-tests.ps1 -Pattern 'refs/tags/v0.2.0','-Branch v0.2.0','Agent Context Memory v0.2.0','eq "0.2.0"'
 git diff --check
 ```
 
-Expected: all tests pass; the search only finds intentional historical changelog text outside the searched files, so this command emits no output.
+Expected: all tests pass and the targeted stale-release search emits no output.
 
 - [ ] **Step 5: Commit release metadata**
 

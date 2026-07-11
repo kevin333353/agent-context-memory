@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 - 2026-07-11
+
+### Fixed
+
+- Codex hooks on Windows now use `commandWindows` with a quote-free encoded
+  PowerShell launcher, preventing `cmd.exe /C` from treating quoted paths as
+  literal `\"...\"` executable names and reporting `SessionStart hook
+  (failed)` with exit code 1.
+- The Codex hook installer retains a stable managed-hook marker while safely
+  supporting tool installation paths that contain spaces.
+
 ## 0.2.0 - 2026-07-11
 
 ### Added

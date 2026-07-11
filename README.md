@@ -27,7 +27,7 @@
 在 PowerShell 裡執行這一行：
 
 ```powershell
-$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.2.0^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.2.0
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.2.1^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.2.1
 ```
 
 這條命令會先用 `git clone` 下載固定版本的 installer，再用 `-File` 執行本機檔案；不要用 `iex` 直接執行遠端內容，Windows PowerShell 對 `param(...)`、UTF-8 BOM、中文輸出會比較容易踩到邊界問題。
@@ -50,20 +50,20 @@ $d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -
 - 之後第一次進入其他 git repo 時，hook 會安全地自動初始化該 repo
 - 若有初始化專案，最後執行 `validate` / `doctor` 做檢查
 
-`v0.1.8` 安裝指令是固定版本 pin，不會自動變成新版。已使用舊指令的同事需要把 tag 與 `-Branch` 都改成 `v0.2.0`，再執行一次上面的新版指令。不要修改或重用舊 tag，否則同一條安裝命令將失去可重現性。
+舊版安裝指令是固定版本 pin，不會自動變成新版。已安裝 `v0.1.8` 或 `v0.2.0` 的使用者需要把 tag 與 `-Branch` 都改成 `v0.2.1`，再執行一次上面的新版指令。不要修改或重用舊 tag，否則同一條安裝命令將失去可重現性。
 
 Auto-init 只會作用在有效 git repository root，不會在工具 repo、使用者家目錄、TEMP 或一般非 git 目錄建立檔案。若某個 repo 不應啟用，先在 repo root 建立 `.context-memory-disabled`。
 
 如果只想安裝工具與 hooks，不想初始化目前專案：
 
 ```powershell
-$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.2.0^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.2.0 -NoProjectInit
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.2.1^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.2.1 -NoProjectInit
 ```
 
 如果要明確指定專案：
 
 ```powershell
-$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.2.0^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.2.0 -ProjectDir "D:\your-project"
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.2.1^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.2.1 -ProjectDir "D:\your-project"
 ```
 
 ### Linux / macOS
@@ -141,7 +141,7 @@ context-memory doctor -Cwd <repo-root>
 
 Windows 上 Claude Code hook 會使用 exec-form `command` + `args`，直接呼叫 Windows PowerShell，避免被 Git Bash/MSYS 包一層後出現 `add_item errno 1`。
 
-如果 Codex 開新對話時顯示 `SessionStart hook (failed)`，先更新到 `v0.2.0` 並重新安裝 Codex hook，再執行 `doctor` 查看持久 diagnostics：
+如果 Codex 開新對話時顯示 `SessionStart hook (failed)`，先更新到 `v0.2.1` 並重新安裝 Codex hook，再執行 `doctor` 查看持久 diagnostics：
 
 ```powershell
 context-memory install codex
