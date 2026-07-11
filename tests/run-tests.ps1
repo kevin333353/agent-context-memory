@@ -49,26 +49,129 @@ function Invoke-Cli {
 
 $TempRoot = Join-Path $env:TEMP ("context-memory-protocol-test-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $TempRoot | Out-Null
+$oldAllowTempAutoInit = $env:CONTEXT_MEMORY_ALLOW_TEMP_AUTO_INIT
+$oldDisableWorkerDispatch = $env:CONTEXT_MEMORY_DISABLE_WORKER_DISPATCH
+$env:CONTEXT_MEMORY_ALLOW_TEMP_AUTO_INIT = "1"
+$env:CONTEXT_MEMORY_DISABLE_WORKER_DISPATCH = "1"
 
 try {
+  $runtimeInstallOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "install.ps1") -SkipRepositorySync -InstallDir $Root -NoPath -NoClaude -NoCodex -NoProjectInit -NoDoctor 2>&1 | Out-String
+  Assert-True ($LASTEXITCODE -eq 0) "managed runtime install failed: $runtimeInstallOutput"
+  $managedPython = Join-Path $Root ".venv\Scripts\python.exe"
+  Assert-True (Test-Path -LiteralPath $managedPython) "installer did not create managed Python"
+  $null = & $managedPython -c "import yaml; print(yaml.__version__)" 2>&1
+  Assert-True ($LASTEXITCODE -eq 0) "managed Python cannot import PyYAML"
+
+  $autoRepo = Join-Path $TempRoot "auto-repo"
+  $autoNested = Join-Path $autoRepo "src\feature"
+  New-Item -ItemType Directory -Force -Path $autoNested | Out-Null
+  & git -C $autoRepo init --quiet
+  $autoPayload = @{ cwd = $autoNested; hook_event_name = "UserPromptSubmit"; prompt = "first prompt" } | ConvertTo-Json -Compress
+  $auto = Invoke-Hook $autoPayload @("-Adapter", "generic-json")
+  Assert-True ($auto.ExitCode -eq 0) "auto-init hook exited $($auto.ExitCode): $($auto.Stdout)"
+  $autoJson = $auto.Stdout | ConvertFrom-Json
+  Assert-True ($autoJson.action -eq "inject") "first hook did not inject after auto-init"
+  Assert-True (Test-Path -LiteralPath (Join-Path $autoRepo ".context-memory\state.yaml")) "hook did not auto-initialize git root"
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $autoNested ".context-memory"))) "hook initialized nested cwd instead of git root"
+  $autoMetadata = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $autoRepo ".context-memory\metadata.json") | ConvertFrom-Json
+  Assert-True ($autoMetadata.initialization_origin -eq "hook_auto") "auto-init origin was not recorded"
+  $autoGitignore = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $autoRepo ".gitignore")
+  Assert-True ($autoGitignore.Contains(".context-memory/events.sqlite")) "auto-init did not protect local memory files"
+  $autoConfig = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $autoRepo ".context-memory\config.yaml")
+  Assert-True ($autoConfig.Contains("auto_run: true")) "new project did not enable background worker"
+
+  $autoJournalPath = Join-Path $autoRepo ".context-memory\events.sqlite"
+  $countEvents = { param($Path) [int](& $managedPython -c "import sqlite3; c=sqlite3.connect(r'$Path'); print(c.execute('select count(*) from events').fetchone()[0]); c.close()") }
+  $eventsBeforeWorkerChild = & $countEvents $autoJournalPath
+  $oldWorkerChild = $env:CONTEXT_MEMORY_WORKER_CHILD
+  try {
+    $env:CONTEXT_MEMORY_WORKER_CHILD = "1"
+    $workerChildHook = Invoke-Hook $autoPayload @("-Adapter", "generic-json")
+  } finally {
+    $env:CONTEXT_MEMORY_WORKER_CHILD = $oldWorkerChild
+  }
+  $eventsAfterWorkerChild = & $countEvents $autoJournalPath
+  Assert-True ([string]::IsNullOrWhiteSpace($workerChildHook.Stdout)) "worker child hook should emit no context"
+  Assert-True ($eventsAfterWorkerChild -eq $eventsBeforeWorkerChild) "worker child hook journaled its own prompt"
+
+  $disabledRepo = Join-Path $TempRoot "disabled-repo"
+  New-Item -ItemType Directory -Force -Path $disabledRepo | Out-Null
+  & git -C $disabledRepo init --quiet
+  New-Item -ItemType File -Force -Path (Join-Path $disabledRepo ".context-memory-disabled") | Out-Null
+  $disabledPayload = @{ cwd = $disabledRepo; hook_event_name = "UserPromptSubmit"; prompt = "skip" } | ConvertTo-Json -Compress
+  $disabled = Invoke-Hook $disabledPayload @("-Adapter", "generic-json")
+  $disabledJson = $disabled.Stdout | ConvertFrom-Json
+  Assert-True ($disabledJson.action -eq "none") "disabled repo should not inject"
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $disabledRepo ".context-memory"))) "disabled repo was auto-initialized"
+
+  $invalidRepo = Join-Path $TempRoot "invalid-input-repo"
+  New-Item -ItemType Directory -Force -Path $invalidRepo | Out-Null
+  & git -C $invalidRepo init --quiet
+  $oldClaudeProjectDir = $env:CLAUDE_PROJECT_DIR
+  try {
+    $env:CLAUDE_PROJECT_DIR = $invalidRepo
+    $invalidHook = Invoke-Hook "not-json" @("-Adapter", "generic-json")
+  } finally {
+    $env:CLAUDE_PROJECT_DIR = $oldClaudeProjectDir
+  }
+  $invalidHookJson = $invalidHook.Stdout | ConvertFrom-Json
+  Assert-True ($invalidHookJson.action -eq "none") "invalid hook input should fail open without injection"
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $invalidRepo ".context-memory"))) "invalid hook input triggered auto-init"
+
+  try {
+    $env:CLAUDE_PROJECT_DIR = $invalidRepo
+    $emptyHook = Invoke-Hook "" @("-Adapter", "generic-json")
+  } finally {
+    $env:CLAUDE_PROJECT_DIR = $oldClaudeProjectDir
+  }
+  $emptyHookJson = $emptyHook.Stdout | ConvertFrom-Json
+  Assert-True ($emptyHookJson.action -eq "none") "empty hook input should fail open without injection"
+  Assert-True (-not (Test-Path -LiteralPath (Join-Path $invalidRepo ".context-memory"))) "empty hook input triggered auto-init"
+
+  $autoStatePath = Join-Path $autoRepo ".context-memory\state.yaml"
+  $autoStateOriginal = Get-Content -Raw -Encoding UTF8 -LiteralPath $autoStatePath
+  $oversizedLine = "  - `"" + ("x" * 12000) + "`""
+  $oversizedState = $autoStateOriginal -replace '(?m)^dynamic_context:\s*\[\]\s*$', "dynamic_context:`n$oversizedLine"
+  $oversizedState | Set-Content -Encoding UTF8 -LiteralPath $autoStatePath
+  $oversizedHook = Invoke-Hook $autoPayload @("-Adapter", "generic-json")
+  $oversizedJson = $oversizedHook.Stdout | ConvertFrom-Json
+  Assert-True ($oversizedJson.action -eq "none") "oversized state should not be injected"
+  $autoStateOriginal | Set-Content -Encoding UTF8 -LiteralPath $autoStatePath
+
   $initPayload = @{ cwd = $TempRoot; hook_event_name = "UserPromptSubmit" } | ConvertTo-Json -Compress
   $init = Invoke-Hook $initPayload @("-Mode", "init")
   Assert-True ($init.ExitCode -eq 0) "init failed: $($init.Stderr)"
   Assert-True (Test-Path -LiteralPath (Join-Path $TempRoot ".context-memory\project.yaml")) "project file was not initialized"
   Assert-True (Test-Path -LiteralPath (Join-Path $TempRoot ".context-memory\handoff\README.md")) "handoff readme was not initialized"
+  $manualMetadata = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $TempRoot ".context-memory\metadata.json") | ConvertFrom-Json
+  Assert-True ($manualMetadata.initialization_origin -eq "manual") "manual init origin was not recorded"
   $projectText = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $TempRoot ".context-memory\project.yaml")
-  Assert-True ($projectText.Contains('root: "."')) "project file should not hardcode an absolute root path"
+  Assert-True ($projectText -match '(?m)^\s*root:\s*["'']?\.["'']?\s*$') "project file should not hardcode an absolute root path"
   $handoffText = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $TempRoot ".context-memory\handoff\README.md")
   Assert-True ($handoffText.Contains("YYYY-MM-DD-owner-topic.md")) "handoff readme did not include filename convention"
 
   $cliInit = Invoke-Cli "init" "-Cwd" $TempRoot "-UpdateGitignore"
   Assert-True ($cliInit.ExitCode -eq 0) "cli init exited $($cliInit.ExitCode): $($cliInit.Stdout)"
+  $cliVersion = Invoke-Cli "version"
+  Assert-True ($cliVersion.ExitCode -eq 0) "cli version exited $($cliVersion.ExitCode): $($cliVersion.Stdout)"
+  Assert-True ($cliVersion.Stdout.Trim() -eq "0.2.0") "cli version did not report 0.2.0"
   $gitignoreText = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $TempRoot ".gitignore")
   Assert-True ($gitignoreText.Contains("!.context-memory/schema.yaml")) "cli init did not add team-safe gitignore rules"
+  Assert-True ($gitignoreText.Contains(".context-memory/metadata.json")) "cli init did not ignore local metadata"
+  Assert-True ($gitignoreText.Contains(".context-memory/diagnostics.log")) "cli init did not ignore diagnostics"
+  Assert-True ($gitignoreText.Contains(".context-memory/*.bak-*")) "cli init did not ignore state backups"
 
   $cliValidate = Invoke-Cli "validate" "-Cwd" $TempRoot
   Assert-True ($cliValidate.ExitCode -eq 0) "cli validate exited $($cliValidate.ExitCode): $($cliValidate.Stdout)"
   Assert-True ($cliValidate.Stdout.Contains("Validation passed")) "cli validate did not pass"
+
+  $stateValidationPath = Join-Path $TempRoot ".context-memory\state.yaml"
+  $validStateText = Get-Content -Raw -Encoding UTF8 -LiteralPath $stateValidationPath
+  $invalidStateText = $validStateText -replace '(?m)^next_actions:\s*\[\]\s*$', 'next_actions: not-a-list'
+  $invalidStateText | Set-Content -Encoding UTF8 -LiteralPath $stateValidationPath
+  $cliInvalidValidate = Invoke-Cli "validate" "-Cwd" $TempRoot
+  Assert-True ($cliInvalidValidate.ExitCode -ne 0) "cli validate accepted a non-list next_actions value"
+  $validStateText | Set-Content -Encoding UTF8 -LiteralPath $stateValidationPath
 
   $cliStatus = Invoke-Cli "status" "-Cwd" $TempRoot
   Assert-True ($cliStatus.ExitCode -eq 0) "cli status exited $($cliStatus.ExitCode): $($cliStatus.Stdout)"
@@ -132,6 +235,10 @@ try {
     $codexHooksPath = Join-Path $TempRoot ".codex\hooks.json"
     Assert-True (Test-Path -LiteralPath $claudeSettingsPath) "claude settings were not written"
     Assert-True (Test-Path -LiteralPath $codexHooksPath) "codex hooks were not written"
+    $claudeSkillPath = Join-Path $TempRoot ".claude\skills\context-memory\SKILL.md"
+    $codexSkillPath = Join-Path $TempRoot ".codex\skills\context-memory\SKILL.md"
+    Assert-True (Test-Path -LiteralPath $claudeSkillPath) "claude context-memory skill was not installed"
+    Assert-True (Test-Path -LiteralPath $codexSkillPath) "codex context-memory skill was not installed"
     $claudeSettingsText = Get-Content -Raw -Encoding UTF8 -LiteralPath $claudeSettingsPath
     $codexHooksText = Get-Content -Raw -Encoding UTF8 -LiteralPath $codexHooksPath
     Assert-True ($claudeSettingsText.Contains("context-memory-hook.ps1")) "claude hook did not reference context-memory"
@@ -139,6 +246,16 @@ try {
     $codexHooks = $codexHooksText | ConvertFrom-Json
     $codexCommand = [string]$codexHooks.hooks.UserPromptSubmit[0].hooks[0].command
     Assert-True ($codexCommand.Contains('-File "')) "codex hook should quote the -File path"
+    $codexSessionMatcher = [string]$codexHooks.hooks.SessionStart[0].matcher
+    Assert-True ($codexSessionMatcher -eq "startup|resume|clear|compact") "codex SessionStart matcher did not cover every documented source"
+
+    $eventsBeforeDoctor = & $countEvents $autoJournalPath
+    $doctor = Invoke-Cli "doctor" "-Cwd" $autoRepo
+    $eventsAfterDoctor = & $countEvents $autoJournalPath
+    Assert-True ($doctor.ExitCode -eq 0) "doctor exited $($doctor.ExitCode): $($doctor.Stdout)"
+    Assert-True ($doctor.Stdout.Contains("Initialization origin: hook_auto")) "doctor did not report auto-init origin"
+    Assert-True ($doctor.Stdout.Contains("Worker status:")) "doctor did not report worker state"
+    Assert-True ($eventsAfterDoctor -eq $eventsBeforeDoctor) "doctor smoke tests polluted the event journal"
 
     $uninstallHooks = Invoke-Cli "uninstall" "all"
     Assert-True ($uninstallHooks.ExitCode -eq 0) "cli uninstall all exited $($uninstallHooks.ExitCode): $($uninstallHooks.Stdout)"
@@ -146,6 +263,8 @@ try {
     $codexHooksText = Get-Content -Raw -Encoding UTF8 -LiteralPath $codexHooksPath
     Assert-True (-not $claudeSettingsText.Contains("context-memory-hook")) "claude uninstall left context-memory hook"
     Assert-True (-not $codexHooksText.Contains("context-memory-hook")) "codex uninstall left context-memory hook"
+    Assert-True (-not (Test-Path -LiteralPath $claudeSkillPath)) "claude uninstall left managed skill"
+    Assert-True (-not (Test-Path -LiteralPath $codexSkillPath)) "codex uninstall left managed skill"
   } finally {
     $env:USERPROFILE = $oldUserProfile
   }
@@ -168,6 +287,8 @@ try {
 
   Write-Output "context-memory protocol tests passed"
 } finally {
+  $env:CONTEXT_MEMORY_ALLOW_TEMP_AUTO_INIT = $oldAllowTempAutoInit
+  $env:CONTEXT_MEMORY_DISABLE_WORKER_DISPATCH = $oldDisableWorkerDispatch
   if (Test-Path -LiteralPath $TempRoot) {
     Remove-Item -LiteralPath $TempRoot -Recurse -Force
   }

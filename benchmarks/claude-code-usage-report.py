@@ -182,12 +182,16 @@ def extract_text(record: dict[str, Any]) -> str:
     return ""
 
 
-def replay_transcript_tokens(transcripts: list[Path], count_tokens) -> dict[str, int]:
-    running = ""
+def replay_transcript_tokens(transcripts: list[Path], count_tokens) -> dict[str, Any]:
     total = 0
     peak = 0
     turns = 0
+    per_transcript = []
     for path in transcripts:
+        running = ""
+        transcript_total = 0
+        transcript_peak = 0
+        transcript_turns = 0
         for _, record in iter_jsonl(path):
             typ = record.get("type")
             if typ not in {"user", "assistant"}:
@@ -197,10 +201,26 @@ def replay_transcript_tokens(transcripts: list[Path], count_tokens) -> dict[str,
                 continue
             payload_tokens = count_tokens(running)
             total += payload_tokens
+            transcript_total += payload_tokens
             peak = max(peak, payload_tokens)
+            transcript_peak = max(transcript_peak, payload_tokens)
             turns += 1
+            transcript_turns += 1
             running += f"\n<{typ}>\n{text}\n</{typ}>\n"
-    return {"turns": turns, "baseline_replay_total_tokens": total, "baseline_replay_peak_tokens": peak}
+        per_transcript.append(
+            {
+                "path": str(path),
+                "turns": transcript_turns,
+                "baseline_replay_total_tokens": transcript_total,
+                "baseline_replay_peak_tokens": transcript_peak,
+            }
+        )
+    return {
+        "turns": turns,
+        "baseline_replay_total_tokens": total,
+        "baseline_replay_peak_tokens": peak,
+        "per_transcript": per_transcript,
+    }
 
 
 def get_memory_context(cwd: Path) -> str:
@@ -309,6 +329,7 @@ def main() -> int:
             "upper_bound_replaceable_percent": percent(latest_upper_saved, latest_input_side),
         },
         "transcript_replay_estimate": {
+            "estimate_kind": "offline_upper_bound_input_replay_estimate",
             **replay,
             "memory_replay_total_tokens": memory_replay_total,
             "replay_saved_tokens": replay_saved,

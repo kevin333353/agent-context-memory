@@ -30,10 +30,10 @@ The stable contract is `context-memory/v1`; individual agent CLIs are thin adapt
    `powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.agent-context-memory\context-memory-hook.ps1" -Mode init`
 2. At the start of work, prefer the injected `<CONTEXT_MEMORY_STATE>` block over old transcripts.
 3. Read full transcripts only when the memory table is missing, contradicted, or the user explicitly asks.
-4. After meaningful changes, update `state.yaml`: current task, decisions, files touched, open questions, and next action.
+4. The managed background worker updates `state.yaml` after the configured event threshold. Update it manually only when the user explicitly asks or when repairing a diagnosed worker failure.
 5. Keep stable interpretation rules above dynamic state. Put frequently changing details near the bottom to preserve prompt-cache prefixes.
 6. Do not paste large logs or full conversations into memory. Store summaries plus file paths.
-7. Use the configured fill-table cascade for background summarization: Claude Code routine `haiku`, repair/rebuild `sonnet`; Codex routine `gpt-5-nano`, repair/rebuild `gpt-5-mini`.
+7. Use the configured fill-table cascade for background summarization: Claude Code routine `haiku`, repair `sonnet`; Codex routine `gpt-5-nano`, repair `gpt-5-mini`.
 
 ## Update Standard
 

@@ -2,12 +2,14 @@
   [string]$RepoUrl = "https://github.com/kevin333353/agent-context-memory.git",
   [string]$Branch = "main",
   [string]$InstallDir = (Join-Path $env:USERPROFILE ".agent-context-memory"),
+  [string]$AgentUserProfile = $env:USERPROFILE,
   [string]$ProjectDir = "",
   [switch]$NoPath,
   [switch]$NoClaude,
   [switch]$NoCodex,
   [switch]$NoProjectInit,
-  [switch]$NoDoctor
+  [switch]$NoDoctor,
+  [switch]$SkipRepositorySync
 )
 
 $ErrorActionPreference = "Stop"
@@ -144,6 +146,42 @@ function Install-Repository {
   }
 }
 
+function Install-ManagedPython {
+  if (-not (Test-CommandExists "python")) {
+    throw "找不到 Python。Agent Context Memory v0.2.0 需要 Python 3.9 以上。"
+  }
+  $python = (Get-Command python -CommandType Application).Source
+  & $python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)"
+  if ($LASTEXITCODE -ne 0) {
+    throw "Python 版本過舊。Agent Context Memory v0.2.0 需要 Python 3.9 以上。"
+  }
+
+  $venvRoot = Join-Path $InstallDir ".venv"
+  $managedPython = Join-Path $venvRoot "Scripts\python.exe"
+  if (-not (Test-Path -LiteralPath $managedPython)) {
+    Write-Step "建立工具專用 Python virtual environment"
+    & $python -m venv $venvRoot
+    if ($LASTEXITCODE -ne 0) {
+      throw "建立 Python virtual environment 失敗：$venvRoot"
+    }
+  }
+
+  $requirements = Join-Path $InstallDir "requirements.txt"
+  if (-not (Test-Path -LiteralPath $requirements)) {
+    throw "找不到 Python dependencies：$requirements"
+  }
+  Write-Step "安裝固定版本 Python dependencies"
+  & $managedPython -m pip install --quiet --disable-pip-version-check -r $requirements
+  if ($LASTEXITCODE -ne 0) {
+    throw "安裝 Python dependencies 失敗。"
+  }
+  & $managedPython -c "import yaml"
+  if ($LASTEXITCODE -ne 0) {
+    throw "Managed Python 無法載入 PyYAML。"
+  }
+  Write-Step "Managed Python ready：$managedPython"
+}
+
 function Invoke-ContextMemory([string[]]$CliArgs) {
   $cli = Join-Path $InstallDir "context-memory.ps1"
   if (-not (Test-Path -LiteralPath $cli)) {
@@ -180,36 +218,53 @@ function Resolve-ProjectDir {
 }
 
 Write-Step "開始安裝 Agent Context Memory"
-Install-Repository
+if ($SkipRepositorySync) {
+  if (-not (Test-Path -LiteralPath (Join-Path $InstallDir "context-memory.ps1"))) {
+    throw "SkipRepositorySync 需要既有工具 source checkout：$InstallDir"
+  }
+  Write-Step "略過 repository 同步，使用既有 source checkout：$InstallDir"
+} else {
+  Install-Repository
+}
+Install-ManagedPython
 
 if (-not $NoPath) {
   Add-UserPath $InstallDir
 }
 
-if (-not $NoClaude -and -not $NoCodex) {
-  Write-Step "安裝 Claude Code 與 Codex hooks"
-  Invoke-ContextMemory @("install", "all")
-} elseif (-not $NoClaude) {
-  Write-Step "安裝 Claude Code hooks"
-  Invoke-ContextMemory @("install", "claude")
-} elseif (-not $NoCodex) {
-  Write-Step "安裝 Codex hooks"
-  Invoke-ContextMemory @("install", "codex")
-} else {
-  Write-Step "略過 agent hooks 安裝"
+if (-not (Test-Path -LiteralPath $AgentUserProfile)) {
+  New-Item -ItemType Directory -Force -Path $AgentUserProfile | Out-Null
 }
-
-$resolvedProject = Resolve-ProjectDir
-if ($resolvedProject) {
-  Write-Step "初始化目前 git 專案：$resolvedProject"
-  Invoke-ContextMemory @("init", "-Cwd", $resolvedProject, "-UpdateGitignore")
-  Invoke-ContextMemory @("validate", "-Cwd", $resolvedProject)
-  if (-not $NoDoctor) {
-    Invoke-ContextMemory @("doctor", "-Cwd", $resolvedProject)
+$originalUserProfile = $env:USERPROFILE
+try {
+  $env:USERPROFILE = $AgentUserProfile
+  if (-not $NoClaude -and -not $NoCodex) {
+    Write-Step "安裝 Claude Code 與 Codex hooks"
+    Invoke-ContextMemory @("install", "all")
+  } elseif (-not $NoClaude) {
+    Write-Step "安裝 Claude Code hooks"
+    Invoke-ContextMemory @("install", "claude")
+  } elseif (-not $NoCodex) {
+    Write-Step "安裝 Codex hooks"
+    Invoke-ContextMemory @("install", "codex")
+  } else {
+    Write-Step "略過 agent hooks 安裝"
   }
-} else {
-  Write-Step "未指定專案，且目前目錄不是可初始化的 git repo；只安裝全域工具與 hooks。"
-  Write-Step "之後可在專案根目錄執行：context-memory init -UpdateGitignore"
+
+  $resolvedProject = Resolve-ProjectDir
+  if ($resolvedProject) {
+    Write-Step "初始化目前 git 專案：$resolvedProject"
+    Invoke-ContextMemory @("init", "-Cwd", $resolvedProject, "-UpdateGitignore")
+    Invoke-ContextMemory @("validate", "-Cwd", $resolvedProject)
+    if (-not $NoDoctor) {
+      Invoke-ContextMemory @("doctor", "-Cwd", $resolvedProject)
+    }
+  } else {
+    Write-Step "本次初始化專案數：0。已安裝全域工具與 hooks。"
+    Write-Step "第一次進入符合條件的 git repo 時，hook 會自動初始化；也可手動執行 context-memory init -UpdateGitignore。"
+  }
+} finally {
+  $env:USERPROFILE = $originalUserProfile
 }
 
 Write-Step "安裝完成。新開 terminal 後可直接使用：context-memory help"
