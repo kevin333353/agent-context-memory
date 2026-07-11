@@ -122,7 +122,12 @@ function Test-ContextMemoryHook($Hook) {
   if ($Hook.args) {
     $argsText = (@($Hook.args) -join " ")
   }
-  return ($command -like "*context-memory-hook*" -or $argsText -like "*context-memory-hook*")
+  $statusMessage = [string]$Hook.statusMessage
+  return (
+    $command -like "*context-memory-hook*" -or
+    $argsText -like "*context-memory-hook*" -or
+    $statusMessage -like "*context-memory-hook*"
+  )
 }
 
 function Set-HookEvent($HooksObj, [string]$EventName, [string]$Matcher, $HookDef) {
@@ -212,11 +217,16 @@ function New-ClaudeHookDef {
 }
 
 function New-CodexHookDef {
-  $hookPath = (Join-Path $ToolRoot "context-memory-hook.ps1").Replace("\", "/")
-  $powerShellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+  $hookPath = Join-Path $ToolRoot "context-memory-hook.ps1"
+  $escapedHookPath = $hookPath.Replace("'", "''")
+  $scriptText = "`$ProgressPreference = 'SilentlyContinue'; & '$escapedHookPath' -Adapter 'codex-cli'"
+  $encodedScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptText))
+  $launcher = "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encodedScript"
   return [pscustomobject][ordered]@{
     type = "command"
-    command = "`"$powerShellPath`" -NoProfile -ExecutionPolicy Bypass -File `"$hookPath`" -Adapter codex-cli"
+    command = $launcher
+    commandWindows = $launcher
+    statusMessage = "Loading Agent Context Memory (context-memory-hook.ps1)"
   }
 }
 

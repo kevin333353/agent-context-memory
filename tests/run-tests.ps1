@@ -154,7 +154,7 @@ try {
   Assert-True ($cliInit.ExitCode -eq 0) "cli init exited $($cliInit.ExitCode): $($cliInit.Stdout)"
   $cliVersion = Invoke-Cli "version"
   Assert-True ($cliVersion.ExitCode -eq 0) "cli version exited $($cliVersion.ExitCode): $($cliVersion.Stdout)"
-  Assert-True ($cliVersion.Stdout.Trim() -eq "0.2.0") "cli version did not report 0.2.0"
+  Assert-True ($cliVersion.Stdout.Trim() -eq "0.2.1") "cli version did not report 0.2.1"
   $gitignoreText = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $TempRoot ".gitignore")
   Assert-True ($gitignoreText.Contains("!.context-memory/schema.yaml")) "cli init did not add team-safe gitignore rules"
   Assert-True ($gitignoreText.Contains(".context-memory/metadata.json")) "cli init did not ignore local metadata"
@@ -244,8 +244,32 @@ try {
     Assert-True ($claudeSettingsText.Contains("context-memory-hook.ps1")) "claude hook did not reference context-memory"
     Assert-True ($codexHooksText.Contains("context-memory-hook.ps1")) "codex hook did not reference context-memory"
     $codexHooks = $codexHooksText | ConvertFrom-Json
-    $codexCommand = [string]$codexHooks.hooks.UserPromptSubmit[0].hooks[0].command
-    Assert-True ($codexCommand.Contains('-File "')) "codex hook should quote the -File path"
+    $codexHook = $codexHooks.hooks.SessionStart[0].hooks[0]
+    $codexCommand = [string]$codexHook.command
+    $codexWindowsCommand = [string]$codexHook.commandWindows
+    $codexEffectiveCommand = if ([string]::IsNullOrWhiteSpace($codexWindowsCommand)) {
+      $codexCommand
+    } else {
+      $codexWindowsCommand
+    }
+    $toolRepoSessionPayload = @{
+      cwd = $Root
+      hook_event_name = "SessionStart"
+      source = "startup"
+    } | ConvertTo-Json -Compress
+    $env:CONTEXT_MEMORY_TEST_CODEX_COMMAND = $codexEffectiveCommand
+    $env:CONTEXT_MEMORY_TEST_CODEX_PAYLOAD = $toolRepoSessionPayload
+    $codexRunner = Join-Path $PSScriptRoot "run_codex_hook_command.py"
+    $codexHookResults = (& $managedPython $codexRunner | Out-String) | ConvertFrom-Json
+    Remove-Item Env:CONTEXT_MEMORY_TEST_CODEX_COMMAND -ErrorAction SilentlyContinue
+    Remove-Item Env:CONTEXT_MEMORY_TEST_CODEX_PAYLOAD -ErrorAction SilentlyContinue
+    foreach ($runnerName in @("cmd", "powershell")) {
+      $codexHookResult = $codexHookResults.$runnerName
+      Assert-True ([int]$codexHookResult.exit_code -eq 0) "Codex Windows hook command failed in ${runnerName} with exit $($codexHookResult.exit_code): $($codexHookResult.stderr)"
+      Assert-True ([string]::IsNullOrWhiteSpace([string]$codexHookResult.stdout)) "Codex ineligible-repo SessionStart should emit no output in $runnerName"
+      Assert-True ([string]::IsNullOrWhiteSpace([string]$codexHookResult.stderr)) "Codex ineligible-repo SessionStart should emit no stderr in $runnerName"
+    }
+    Assert-True (-not [string]::IsNullOrWhiteSpace($codexWindowsCommand)) "Codex hook did not define commandWindows"
     $codexSessionMatcher = [string]$codexHooks.hooks.SessionStart[0].matcher
     Assert-True ($codexSessionMatcher -eq "startup|resume|clear|compact") "codex SessionStart matcher did not cover every documented source"
 

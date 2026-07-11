@@ -148,12 +148,12 @@ function Install-Repository {
 
 function Install-ManagedPython {
   if (-not (Test-CommandExists "python")) {
-    throw "找不到 Python。Agent Context Memory v0.2.0 需要 Python 3.9 以上。"
+    throw "找不到 Python。Agent Context Memory v0.2.1 需要 Python 3.9 以上。"
   }
   $python = (Get-Command python -CommandType Application).Source
   & $python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)"
   if ($LASTEXITCODE -ne 0) {
-    throw "Python 版本過舊。Agent Context Memory v0.2.0 需要 Python 3.9 以上。"
+    throw "Python 版本過舊。Agent Context Memory v0.2.1 需要 Python 3.9 以上。"
   }
 
   $venvRoot = Join-Path $InstallDir ".venv"
