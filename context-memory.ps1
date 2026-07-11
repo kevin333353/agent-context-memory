@@ -212,11 +212,15 @@ function New-ClaudeHookDef {
 }
 
 function New-CodexHookDef {
-  $hookPath = (Join-Path $ToolRoot "context-memory-hook.ps1").Replace("\", "/")
-  $powerShellPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+  $hookPath = Join-Path $ToolRoot "context-memory-hook.ps1"
+  $escapedHookPath = $hookPath.Replace("'", "''")
+  $scriptText = "`$ProgressPreference = 'SilentlyContinue'; & '$escapedHookPath' -Adapter 'codex-cli'"
+  $encodedScript = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptText))
+  $launcher = "set CONTEXT_MEMORY_HOOK=context-memory-hook.ps1&&%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encodedScript"
   return [pscustomobject][ordered]@{
     type = "command"
-    command = "`"$powerShellPath`" -NoProfile -ExecutionPolicy Bypass -File `"$hookPath`" -Adapter codex-cli"
+    command = $launcher
+    commandWindows = $launcher
   }
 }
 

@@ -21,6 +21,7 @@
 ### Task 1: Reproduce And Fix The Windows Codex Launcher
 
 **Files:**
+- Create: `tests/run_codex_hook_command.py`
 - Modify: `tests/run-tests.ps1`
 - Modify: `context-memory.ps1`
 
