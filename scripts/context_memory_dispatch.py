@@ -126,12 +126,15 @@ def record_and_maybe_dispatch(
 
     threshold = max(1, int(fill_config.get("summary_interval_turns") or 3))
     unprocessed = journal.read_unprocessed_events(db_path, threshold)
-    force_compact = str(event.get("event") or "") == "post_compact"
+    event_name = str(event.get("event") or "")
+    force_compact = event_name in {"pre_compact", "post_compact"}
     due = force_compact or len(unprocessed) >= threshold
     result["dispatch_due"] = due
     if not due:
         return result
-    result["dispatch_reason"] = "post_compact" if force_compact else "threshold"
+    result["dispatch_reason"] = event_name if force_compact else "threshold"
+    if event_name == "pre_compact":
+        return result
 
     if os.environ.get("CONTEXT_MEMORY_DISABLE_WORKER_DISPATCH") == "1":
         result["dispatch_reason"] = "disabled_env"
@@ -177,6 +180,14 @@ def run_worker_locked(memory_root: Path, adapter: str, tool_root: Path) -> dict:
         raise
 
 
+def run_worker_synchronously(
+    memory_root: Path, adapter: str, tool_root: Path
+) -> dict:
+    if os.environ.get("CONTEXT_MEMORY_DISABLE_WORKER_DISPATCH") == "1":
+        return {"status": "disabled_env", "memory_root": str(memory_root)}
+    return run_worker_locked(memory_root, adapter, tool_root)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -191,6 +202,10 @@ def main() -> int:
     worker_parser.add_argument("--memory-root", required=True)
     worker_parser.add_argument("--adapter", required=True)
     worker_parser.add_argument("--tool-root", required=True)
+    now_parser = subparsers.add_parser("run-worker-now")
+    now_parser.add_argument("--memory-root", required=True)
+    now_parser.add_argument("--adapter", required=True)
+    now_parser.add_argument("--tool-root", required=True)
 
     args = parser.parse_args()
     memory_root = Path(args.memory_root)
@@ -201,8 +216,10 @@ def main() -> int:
         result = record_and_maybe_dispatch(
             memory_root, args.adapter, event, config, tool_root
         )
-    else:
+    elif args.command == "run-worker":
         result = run_worker_locked(memory_root, args.adapter, tool_root)
+    else:
+        result = run_worker_synchronously(memory_root, args.adapter, tool_root)
     print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
     return 0
 

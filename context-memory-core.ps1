@@ -482,6 +482,29 @@ function Invoke-ContextMemorySessionGuard($inputObj, [string]$memoryRoot, [strin
   }
 }
 
+function Invoke-ContextMemoryCheckpoint([string]$memoryRoot, [string]$adapterName) {
+  if ($adapterName -ne "claude-code" -or -not $memoryRoot) {
+    return $null
+  }
+  $pythonPath = Get-ContextMemoryPythonPath
+  $dispatchScript = Join-Path $script:ContextMemoryCoreRoot "scripts\context_memory_dispatch.py"
+  if (-not $pythonPath -or -not (Test-Path -LiteralPath $dispatchScript)) {
+    Write-ContextMemoryDiagnostic $memoryRoot "single-session checkpoint skipped: runtime unavailable"
+    return $null
+  }
+  try {
+    $output = & $pythonPath $dispatchScript run-worker-now --memory-root $memoryRoot --adapter $adapterName --tool-root $script:ContextMemoryCoreRoot 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+      Write-ContextMemoryDiagnostic $memoryRoot "single-session checkpoint failed with exit code $LASTEXITCODE"
+      return $null
+    }
+    return ($output | ConvertFrom-Json)
+  } catch {
+    Write-ContextMemoryDiagnostic $memoryRoot "single-session checkpoint failed: $($_.Exception.Message)"
+    return $null
+  }
+}
+
 function Invoke-ContextMemoryProtocol {
   param(
     [ValidateSet("auto", "init", "inject", "post-compact")]
@@ -551,6 +574,7 @@ function Invoke-ContextMemoryProtocol {
   if ($Mode -eq "auto" -and $event -eq "pre_compact") {
     $guard = Invoke-ContextMemorySessionGuard $inputObj $memoryRoot $AdapterName
     $journaled = Write-ContextMemoryJournal $inputObj $memoryRoot $event $frameworkEvent $cwd $AdapterName "pre_compact"
+    $checkpoint = Invoke-ContextMemoryCheckpoint $memoryRoot $AdapterName
     return @{
       protocol = "context-memory/v1"
       action = "pre_compact"
@@ -563,6 +587,7 @@ function Invoke-ContextMemoryProtocol {
       guard = $guard
       block = $false
       block_reason = ""
+      checkpoint = $checkpoint
     }
   }
 
@@ -624,6 +649,7 @@ function Invoke-ContextMemoryProtocol {
     $blockReason = "Claude context is $observed input tokens, above the $threshold single-session guard. Run /compact preserve current goals, decisions, changed files, test results, blockers, and next steps; then resubmit the prompt."
   }
   $journaled = Write-ContextMemoryJournal $inputObj $memoryRoot $event $frameworkEvent $cwd $AdapterName $(if ($block) { "blocked_for_compact" } else { "inject" })
+  $checkpoint = $(if ($block) { Invoke-ContextMemoryCheckpoint $memoryRoot $AdapterName } else { $null })
   return @{
     protocol = "context-memory/v1"
     action = "inject"
@@ -636,5 +662,6 @@ function Invoke-ContextMemoryProtocol {
     guard = $guard
     block = $block
     block_reason = $blockReason
+    checkpoint = $checkpoint
   }
 }
