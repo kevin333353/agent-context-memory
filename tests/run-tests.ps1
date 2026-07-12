@@ -55,8 +55,34 @@ $env:CONTEXT_MEMORY_ALLOW_TEMP_AUTO_INIT = "1"
 $env:CONTEXT_MEMORY_DISABLE_WORKER_DISPATCH = "1"
 
 try {
-  $runtimeInstallOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "install.ps1") -SkipRepositorySync -InstallDir $Root -NoPath -NoClaude -NoCodex -NoProjectInit -NoDoctor 2>&1 | Out-String
-  Assert-True ($LASTEXITCODE -eq 0) "managed runtime install failed: $runtimeInstallOutput"
+  $bootstrapPython = $null
+  foreach ($candidate in @(Get-Command python -CommandType Application -All -ErrorAction SilentlyContinue)) {
+    $candidatePath = [string]$candidate.Source
+    try {
+      & $candidatePath -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)" *> $null
+      if ($LASTEXITCODE -eq 0) {
+        $bootstrapPython = $candidatePath
+        break
+      }
+    } catch {}
+  }
+  Assert-True (-not [string]::IsNullOrWhiteSpace($bootstrapPython)) "test requires Python 3.9+"
+
+  $shimOne = Join-Path $TempRoot "python-shim-one"
+  $shimTwo = Join-Path $TempRoot "python-shim-two"
+  New-Item -ItemType Directory -Force -Path $shimOne,$shimTwo | Out-Null
+  $shimText = "@echo off`r`n`"$bootstrapPython`" %*`r`n"
+  $shimText | Set-Content -Encoding ASCII -LiteralPath (Join-Path $shimOne "python.cmd")
+  $shimText | Set-Content -Encoding ASCII -LiteralPath (Join-Path $shimTwo "python.cmd")
+
+  $originalPath = $env:Path
+  try {
+    $env:Path = "$shimOne;$shimTwo;$originalPath"
+    $runtimeInstallOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "install.ps1") -SkipRepositorySync -InstallDir $Root -NoPath -NoClaude -NoCodex -NoProjectInit -NoDoctor 2>&1 | Out-String
+    Assert-True ($LASTEXITCODE -eq 0) "managed runtime install failed with duplicate Python commands: $runtimeInstallOutput"
+  } finally {
+    $env:Path = $originalPath
+  }
   $managedPython = Join-Path $Root ".venv\Scripts\python.exe"
   Assert-True (Test-Path -LiteralPath $managedPython) "installer did not create managed Python"
   $null = & $managedPython -c "import yaml; print(yaml.__version__)" 2>&1
