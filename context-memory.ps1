@@ -5,6 +5,7 @@
   [string]$Target = "",
   [string]$Cwd = (Get-Location).Path,
   [int]$TokenLimit = 2000,
+  [int]$ThresholdTokens = 40000,
   [switch]$UpdateGitignore,
   [switch]$All
 )
@@ -45,12 +46,14 @@ Commands:
   validate          Validate memory files and state size
   resume            Print a new-chat resume prompt
   compact-state     Add a history marker when state.yaml exceeds the token target
+  single-session    Enable, inspect, or disable Claude single-session guard
   benchmark         Run synthetic token-savings benchmark
   help              Show this help
 
 Options:
   -Cwd <path>             Project directory, default current directory
   -TokenLimit <number>    Target state.yaml token limit, default 2000
+  -ThresholdTokens <n>    Single-session guard threshold, default 40000
   -UpdateGitignore        During init, update .gitignore for team-safe files
 "@
 }
@@ -430,6 +433,50 @@ function Invoke-InstallCommandFor([string]$TargetName) {
     default {
       throw "Unknown install target: $TargetName. Use claude, codex, or all."
     }
+  }
+}
+
+function Invoke-SingleSessionCommand {
+  $action = $Target.ToLowerInvariant()
+  if ($action -notin @("enable", "status", "disable")) {
+    throw "Unknown single-session action: $Target. Use enable, status, or disable."
+  }
+  if ($ThresholdTokens -lt 1) {
+    throw "ThresholdTokens must be greater than zero."
+  }
+
+  $projectRoot = Get-ProjectRoot $Cwd
+  $pythonPath = Get-ContextMemoryPythonPath
+  $runtimeScript = Join-Path $ToolRoot "scripts\context_memory_runtime.py"
+  if (-not $pythonPath -or -not (Test-Path -LiteralPath $runtimeScript)) {
+    throw "Managed Python runtime is unavailable. Run the v0.3.0 installer first."
+  }
+
+  $runtimeOutput = & $pythonPath $runtimeScript single-session --project-root $projectRoot --tool-root $ToolRoot --action $action --threshold-tokens $ThresholdTokens 2>&1 | Out-String
+  if ($LASTEXITCODE -ne 0) {
+    throw "single-session $action failed: $runtimeOutput"
+  }
+  $result = $runtimeOutput | ConvertFrom-Json
+  if ($action -eq "enable") {
+    Invoke-InstallCommandFor "claude"
+  }
+
+  Write-Output "Single-session guard: $(if ($result.enabled) { 'enabled' } else { 'disabled' })"
+  Write-Output "Project root: $($result.project_root)"
+  Write-Output "Threshold tokens: $($result.threshold_tokens)"
+  Write-Output "Effective threshold: $($result.effective_threshold)"
+  Write-Output "Last observed tokens: $(if ($null -eq $result.last_observed_tokens) { 'not_observed' } else { $result.last_observed_tokens })"
+  Write-Output "Post-compact baseline: $(if ($null -eq $result.post_compact_baseline_tokens) { 'not_observed' } else { $result.post_compact_baseline_tokens })"
+  Write-Output "Auto-compact window: $($result.auto_compact_window_tokens)"
+  Write-Output "Claude local settings: $($result.settings_path)"
+  if ($result.environment_override) {
+    Write-Output "[WARN] CLAUDE_CODE_AUTO_COMPACT_WINDOW overrides the project-local setting."
+  }
+  if ($result.settings_restored) {
+    Write-Output "Restored the previous project-local autoCompactWindow value."
+  }
+  if ($result.settings_preserved) {
+    Write-Output "[WARN] Kept the user-modified project-local autoCompactWindow value."
   }
 }
 
@@ -944,6 +991,7 @@ Commands:
   validate          Validate memory files and state size
   resume            Print a new-chat resume prompt
   compact-state     Add a history marker when state.yaml exceeds the token target
+  single-session    Enable, inspect, or disable Claude single-session guard
   benchmark         Run synthetic token-savings benchmark
   version           Show installed version
   help              Show this help
@@ -951,6 +999,7 @@ Commands:
 Options:
   -Cwd <path>             Project directory, default current directory
   -TokenLimit <number>    Target state.yaml token limit, default 2000
+  -ThresholdTokens <n>    Single-session guard threshold, default 40000
   -UpdateGitignore        During init, update .gitignore for team-safe files
 "@
 }
@@ -965,6 +1014,7 @@ switch ($Command.ToLowerInvariant()) {
   "validate" { Invoke-ValidateCommand }
   "resume" { Invoke-ResumeCommand }
   "compact-state" { Invoke-CompactStateCommand }
+  "single-session" { Invoke-SingleSessionCommand }
   "benchmark" { Invoke-BenchmarkCommand }
   "version" { Invoke-VersionCommand }
   "help" { Invoke-ContextMemoryHelp }

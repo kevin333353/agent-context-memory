@@ -255,6 +255,40 @@ try {
   $oldUserProfile = $env:USERPROFILE
   try {
     $env:USERPROFILE = $TempRoot
+    $guardRepo = Join-Path $TempRoot "single-session-repo"
+    New-Item -ItemType Directory -Force -Path $guardRepo | Out-Null
+    & git -C $guardRepo init --quiet
+    $guardClaudeDir = Join-Path $guardRepo ".claude"
+    New-Item -ItemType Directory -Force -Path $guardClaudeDir | Out-Null
+    @{
+      permissions = @{ allow = @("Read") }
+      autoCompactWindow = 200000
+    } | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $guardClaudeDir "settings.local.json")
+
+    $guardEnable = Invoke-Cli "single-session" "enable" "-Cwd" $guardRepo "-ThresholdTokens" "45000"
+    Assert-True ($guardEnable.ExitCode -eq 0) "single-session enable exited $($guardEnable.ExitCode): $($guardEnable.Stdout)"
+    Assert-True ($guardEnable.Stdout.Contains("Single-session guard: enabled")) "enable did not report enabled state"
+    Assert-True ($guardEnable.Stdout.Contains("Threshold tokens: 45000")) "enable did not report custom threshold"
+    $guardConfig = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $guardRepo ".context-memory\config.yaml")
+    Assert-True ($guardConfig.Contains("threshold_tokens: 45000")) "enable did not persist threshold"
+    Assert-True ($guardConfig.Contains("enabled: true")) "enable did not persist enabled state"
+    $guardLocalSettings = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $guardClaudeDir "settings.local.json") | ConvertFrom-Json
+    Assert-True ([int]$guardLocalSettings.autoCompactWindow -eq 100000) "enable did not set project-local auto compact"
+    Assert-True ($guardLocalSettings.permissions.allow -contains "Read") "enable replaced unrelated project-local settings"
+    $guardGitignore = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $guardRepo ".gitignore")
+    Assert-True ($guardGitignore.Contains(".context-memory/single-session-guard.json")) "enable did not ignore local guard state"
+
+    $guardStatus = Invoke-Cli "single-session" "status" "-Cwd" $guardRepo
+    Assert-True ($guardStatus.ExitCode -eq 0) "single-session status exited $($guardStatus.ExitCode): $($guardStatus.Stdout)"
+    Assert-True ($guardStatus.Stdout.Contains("Single-session guard: enabled")) "status did not report enabled state"
+    Assert-True ($guardStatus.Stdout.Contains("Auto-compact window: 100000")) "status did not report auto compact window"
+
+    $guardDisable = Invoke-Cli "single-session" "disable" "-Cwd" $guardRepo
+    Assert-True ($guardDisable.ExitCode -eq 0) "single-session disable exited $($guardDisable.ExitCode): $($guardDisable.Stdout)"
+    Assert-True ($guardDisable.Stdout.Contains("Single-session guard: disabled")) "disable did not report disabled state"
+    $guardRestoredSettings = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $guardClaudeDir "settings.local.json") | ConvertFrom-Json
+    Assert-True ([int]$guardRestoredSettings.autoCompactWindow -eq 200000) "disable did not restore project-local auto compact"
+
     $installHooks = Invoke-Cli "install" "all"
     Assert-True ($installHooks.ExitCode -eq 0) "cli install all exited $($installHooks.ExitCode): $($installHooks.Stdout)"
     $claudeSettingsPath = Join-Path $TempRoot ".claude\settings.json"

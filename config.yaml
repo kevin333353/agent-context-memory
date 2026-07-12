@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 auto_init:
   enabled: true
   update_gitignore: true
@@ -36,3 +36,9 @@ fill_table:
       routine_model: "gpt-5-nano"
       repair_model: "gpt-5-mini"
       reasoning_effort: "low"
+single_session_guard:
+  enabled: false
+  threshold_tokens: 40000
+  min_growth_after_compact_tokens: 10000
+  block_on_threshold: true
+  auto_compact_window_tokens: 100000
