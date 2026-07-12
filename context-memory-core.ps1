@@ -7,6 +7,12 @@
 }
 
 $script:ContextMemoryCoreRoot = Split-Path -Parent $PSCommandPath
+$script:ContextMemoryPythonResolverLoaded = $false
+$pythonResolver = Join-Path $script:ContextMemoryCoreRoot "python-resolver.ps1"
+if (Test-Path -LiteralPath $pythonResolver) {
+  . $pythonResolver
+  $script:ContextMemoryPythonResolverLoaded = $true
+}
 
 function Read-ContextMemoryInput([string]$InputRaw) {
   $raw = $InputRaw
@@ -89,9 +95,8 @@ function Get-ContextMemoryPythonPath {
   if (Test-Path -LiteralPath $managed) {
     return $managed
   }
-  $pythonCommand = Get-Command python -CommandType Application -ErrorAction SilentlyContinue
-  if ($pythonCommand) {
-    return $pythonCommand.Source
+  if ($script:ContextMemoryPythonResolverLoaded) {
+    return Get-ContextMemoryCompatiblePythonPath
   }
   return $null
 }
