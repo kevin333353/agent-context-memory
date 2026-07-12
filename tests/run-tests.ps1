@@ -308,6 +308,20 @@ try {
     Assert-True ($claudeSettings.hooks.PSObject.Properties["PreCompact"] -ne $null) "Claude hooks did not install PreCompact"
     Assert-True ($codexHooks.hooks.PSObject.Properties["PreCompact"] -eq $null) "Codex hooks should not install Claude-only PreCompact"
 
+    $disabledPreCompactHook = $claudeSettings.hooks.PreCompact[0].hooks[0]
+    $disabledPreCompactPayload = @{
+      cwd = $autoRepo
+      transcript_path = (Join-Path $autoRepo "disabled-guard.jsonl")
+      hook_event_name = "PreCompact"
+      trigger = "manual"
+    } | ConvertTo-Json -Compress
+    $eventsBeforeDisabledPreCompact = & $countEvents $autoJournalPath
+    $disabledPreCompactRaw = $disabledPreCompactPayload | & $disabledPreCompactHook.command @($disabledPreCompactHook.args)
+    $eventsAfterDisabledPreCompact = & $countEvents $autoJournalPath
+    Assert-True ($LASTEXITCODE -eq 0) "disabled PreCompact hook failed: $($disabledPreCompactRaw -join "`n")"
+    Assert-True ($eventsAfterDisabledPreCompact -eq $eventsBeforeDisabledPreCompact) "disabled PreCompact changed the journal"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $autoRepo ".context-memory\single-session-guard.json"))) "disabled PreCompact created guard state"
+
     $guardEnableForHooks = Invoke-Cli "single-session" "enable" "-Cwd" $guardRepo "-ThresholdTokens" "40000"
     Assert-True ($guardEnableForHooks.ExitCode -eq 0) "guard hook enable failed: $($guardEnableForHooks.Stdout)"
     $claudeSettings = Get-Content -Raw -Encoding UTF8 -LiteralPath $claudeSettingsPath | ConvertFrom-Json

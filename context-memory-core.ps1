@@ -461,6 +461,13 @@ function Invoke-ContextMemorySessionGuard($inputObj, [string]$memoryRoot, [strin
   if ($adapterName -ne "claude-code" -or -not $inputObj -or -not $memoryRoot) {
     return $null
   }
+  $guardEvent = [string]$inputObj.hook_event_name
+  if ($guardEvent -notin @("UserPromptSubmit", "PreCompact", "PostCompact", "SessionStart")) {
+    return $null
+  }
+  if ($guardEvent -eq "SessionStart" -and [string]$inputObj.source -notin @("clear", "compact")) {
+    return $null
+  }
   $pythonPath = Get-ContextMemoryPythonPath
   $guardScript = Join-Path $script:ContextMemoryCoreRoot "scripts\context_memory_session_guard.py"
   if (-not $pythonPath -or -not (Test-Path -LiteralPath $guardScript)) {
@@ -573,8 +580,24 @@ function Invoke-ContextMemoryProtocol {
 
   if ($Mode -eq "auto" -and $event -eq "pre_compact") {
     $guard = Invoke-ContextMemorySessionGuard $inputObj $memoryRoot $AdapterName
+    if (-not $guard -or -not [bool]$guard.enabled) {
+      return @{
+        protocol = "context-memory/v1"
+        action = "none"
+        event = $event
+        framework_event = $frameworkEvent
+        cwd = $cwd
+        memory_root = $memoryRoot
+        context = $null
+        journaled = $false
+        guard = $guard
+        block = $false
+        block_reason = ""
+        checkpoint = $null
+      }
+    }
     $journaled = Write-ContextMemoryJournal $inputObj $memoryRoot $event $frameworkEvent $cwd $AdapterName "pre_compact"
-    $checkpoint = Invoke-ContextMemoryCheckpoint $memoryRoot $AdapterName
+    $checkpoint = $(if ($guard -and [bool]$guard.enabled) { Invoke-ContextMemoryCheckpoint $memoryRoot $AdapterName } else { $null })
     return @{
       protocol = "context-memory/v1"
       action = "pre_compact"

@@ -98,6 +98,7 @@ GITIGNORE_BLOCK = """# context-memory: shared files
 .context-memory/metadata.json
 .context-memory/diagnostics.log
 .context-memory/single-session-guard.json
+.claude/settings.local.json
 .context-memory/*.lock
 .context-memory/*.tmp
 .context-memory/*.bak-*
@@ -382,6 +383,17 @@ def ensure_gitignore(project_root: Path) -> None:
     path = project_root / ".gitignore"
     existing = path.read_text(encoding="utf-8-sig") if path.exists() else ""
     if "!.context-memory/schema.yaml" in existing:
+        required = (
+            ".context-memory/single-session-guard.json",
+            ".claude/settings.local.json",
+        )
+        existing_lines = {line.strip() for line in existing.splitlines()}
+        missing = [line for line in required if line not in existing_lines]
+        if missing:
+            path.write_text(
+                existing.rstrip() + "\n" + "\n".join(missing) + "\n",
+                encoding="utf-8",
+            )
         return
     prefix = existing.rstrip()
     combined = f"{prefix}\n\n{GITIGNORE_BLOCK}" if prefix else GITIGNORE_BLOCK

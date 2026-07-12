@@ -255,6 +255,21 @@ fill_table:
         self.assertEqual(status["effective_threshold"], 45000)
         self.assertTrue(status["auto_compact_managed"])
 
+    def test_gitignore_migration_adds_new_local_guard_rules(self):
+        self.require_runtime()
+        repo = self.make_git_repo()
+        gitignore = repo / ".gitignore"
+        gitignore.write_text(
+            "!.context-memory/schema.yaml\n.context-memory/events.sqlite\n",
+            encoding="utf-8",
+        )
+
+        runtime.ensure_gitignore(repo)
+
+        updated = gitignore.read_text(encoding="utf-8")
+        self.assertIn(".context-memory/single-session-guard.json", updated)
+        self.assertIn(".claude/settings.local.json", updated)
+
     def test_exclusive_lock_recovers_stale_file(self):
         self.require_runtime()
         lock_path = self.root / "stale.lock"

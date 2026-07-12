@@ -340,6 +340,8 @@ function Update-ContextMemoryGitignore([string]$ProjectRoot) {
 .context-memory/events.sqlite
 .context-memory/metadata.json
 .context-memory/diagnostics.log
+.context-memory/single-session-guard.json
+.claude/settings.local.json
 .context-memory/*.lock
 .context-memory/*.tmp
 .context-memory/*.bak-*
@@ -368,6 +370,17 @@ function Update-ContextMemoryGitignore([string]$ProjectRoot) {
 
   if ($removedOldComment) {
     Write-TextFile $gitignorePath $existing
+    return "updated"
+  }
+
+  $missingRules = @()
+  foreach ($rule in @(".context-memory/single-session-guard.json", ".claude/settings.local.json")) {
+    if ($existing -notmatch ("(?m)^" + [regex]::Escape($rule) + "\s*$")) {
+      $missingRules += $rule
+    }
+  }
+  if ($missingRules.Count -gt 0) {
+    Write-TextFile $gitignorePath ($existing.TrimEnd() + "`n" + ($missingRules -join "`n") + "`n")
     return "updated"
   }
 

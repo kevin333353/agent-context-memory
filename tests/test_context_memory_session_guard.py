@@ -172,6 +172,26 @@ class ContextMemorySessionGuardTests(unittest.TestCase):
         self.assertEqual(state["schema_version"], 1)
         self.assertNotIn(prompt, state_text)
 
+    def test_disabled_compact_event_does_not_create_guard_state(self):
+        memory_root = self.root / ".context-memory"
+        memory_root.mkdir()
+        (memory_root / "config.yaml").write_text(
+            "single_session_guard:\n  enabled: false\n", encoding="utf-8"
+        )
+        self.write_record(self.usage_record("r1", 50000))
+
+        result = guard.handle_hook_event(
+            memory_root,
+            {
+                "hook_event_name": "PreCompact",
+                "transcript_path": str(self.transcript),
+            },
+        )
+
+        self.assertFalse(result["enabled"])
+        self.assertEqual(result["reason"], "disabled")
+        self.assertFalse((memory_root / "single-session-guard.json").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

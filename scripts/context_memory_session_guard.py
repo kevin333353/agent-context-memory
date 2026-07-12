@@ -187,10 +187,14 @@ def handle_hook_event(memory_root: Path, event: dict) -> dict:
     except (OSError, ValueError, TypeError, yaml.YAMLError):
         config = {}
     guard_config = config.get("single_session_guard", {}) or {}
+    guard_enabled = bool(guard_config.get("enabled", False))
     framework_event = str(event.get("hook_event_name") or event.get("event") or "")
     transcript_value = str(event.get("transcript_path") or "")
     transcript = Path(transcript_value) if transcript_value else Path("__missing__")
     state_path = memory_root / "single-session-guard.json"
+
+    if not guard_enabled:
+        return {"enabled": False, "should_block": False, "reason": "disabled"}
 
     if framework_event == "UserPromptSubmit":
         return evaluate_guard(
@@ -202,7 +206,7 @@ def handle_hook_event(memory_root: Path, event: dict) -> dict:
     if framework_event in {"PreCompact", "PostCompact"}:
         state = mark_compact_boundary(transcript, state_path, framework_event)
         return {
-            "enabled": bool(guard_config.get("enabled", False)),
+            "enabled": guard_enabled,
             "should_block": False,
             "reason": framework_event.lower(),
             "compact_offset": state["compact_offset"],
@@ -215,13 +219,13 @@ def handle_hook_event(memory_root: Path, event: dict) -> dict:
             transcript, state_path, str(event.get("source") or "")
         )
         return {
-            "enabled": bool(guard_config.get("enabled", False)),
+            "enabled": guard_enabled,
             "should_block": False,
             "reason": "session_boundary",
             "compact_offset": state["compact_offset"],
         }
     return {
-        "enabled": bool(guard_config.get("enabled", False)),
+        "enabled": guard_enabled,
         "should_block": False,
         "reason": "unhandled_event",
     }
