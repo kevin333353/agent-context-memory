@@ -303,7 +303,88 @@ try {
     $codexHooksText = Get-Content -Raw -Encoding UTF8 -LiteralPath $codexHooksPath
     Assert-True ($claudeSettingsText.Contains("context-memory-hook.ps1")) "claude hook did not reference context-memory"
     Assert-True ($codexHooksText.Contains("context-memory-hook.ps1")) "codex hook did not reference context-memory"
+    $claudeSettings = $claudeSettingsText | ConvertFrom-Json
     $codexHooks = $codexHooksText | ConvertFrom-Json
+    Assert-True ($claudeSettings.hooks.PSObject.Properties["PreCompact"] -ne $null) "Claude hooks did not install PreCompact"
+    Assert-True ($codexHooks.hooks.PSObject.Properties["PreCompact"] -eq $null) "Codex hooks should not install Claude-only PreCompact"
+
+    $guardEnableForHooks = Invoke-Cli "single-session" "enable" "-Cwd" $guardRepo "-ThresholdTokens" "40000"
+    Assert-True ($guardEnableForHooks.ExitCode -eq 0) "guard hook enable failed: $($guardEnableForHooks.Stdout)"
+    $claudeSettings = Get-Content -Raw -Encoding UTF8 -LiteralPath $claudeSettingsPath | ConvertFrom-Json
+    $claudeHook = $claudeSettings.hooks.UserPromptSubmit[0].hooks[0]
+    $guardTranscript = Join-Path $guardRepo "guard-session.jsonl"
+    $guardUtf8 = [System.Text.UTF8Encoding]::new($false)
+    $belowRecord = @{
+      requestId = "below"
+      message = @{ usage = @{ input_tokens = 2; cache_creation_input_tokens = 559; cache_read_input_tokens = 39438 } }
+    } | ConvertTo-Json -Depth 8 -Compress
+    [System.IO.File]::WriteAllText($guardTranscript, $belowRecord + "`n", $guardUtf8)
+    $belowPayload = @{
+      cwd = $guardRepo
+      transcript_path = $guardTranscript
+      hook_event_name = "UserPromptSubmit"
+      prompt = "continue below threshold"
+    } | ConvertTo-Json -Compress
+    $belowRaw = $belowPayload | & $claudeHook.command @($claudeHook.args)
+    $belowExit = $LASTEXITCODE
+    $belowJson = ($belowRaw -join "`n") | ConvertFrom-Json
+    Assert-True ($belowExit -eq 0) "below-threshold Claude hook exited $belowExit"
+    Assert-True ($belowJson.hookSpecificOutput.additionalContext.Contains("<CONTEXT_MEMORY_STATE")) "below-threshold hook did not inject"
+    Assert-True ([string]::IsNullOrWhiteSpace([string]$belowJson.decision)) "below-threshold hook unexpectedly blocked"
+
+    $highRecord = @{
+      requestId = "high"
+      message = @{ usage = @{ input_tokens = 2; cache_creation_input_tokens = 559; cache_read_input_tokens = 44131 } }
+    } | ConvertTo-Json -Depth 8 -Compress
+    [System.IO.File]::WriteAllText($guardTranscript, $highRecord + "`n", $guardUtf8)
+    $blockedPayload = @{
+      cwd = $guardRepo
+      transcript_path = $guardTranscript
+      hook_event_name = "UserPromptSubmit"
+      prompt = "continue above threshold"
+    } | ConvertTo-Json -Compress
+    $blockedRaw = $blockedPayload | & $claudeHook.command @($claudeHook.args)
+    $blockedExit = $LASTEXITCODE
+    $blockedJson = ($blockedRaw -join "`n") | ConvertFrom-Json
+    Assert-True ($blockedExit -eq 0) "blocked Claude hook exited $blockedExit"
+    Assert-True ($blockedJson.decision -eq "block") "Claude guard did not block above threshold"
+    Assert-True ($blockedJson.reason.Contains("44,692")) "block reason omitted observed tokens"
+    Assert-True ($blockedJson.reason.Contains("/compact")) "block reason omitted compact command"
+
+    $compactCommandPayload = @{
+      cwd = $guardRepo
+      transcript_path = $guardTranscript
+      hook_event_name = "UserPromptSubmit"
+      prompt = "/compact preserve goals decisions files tests and next steps"
+    } | ConvertTo-Json -Compress
+    $compactCommandRaw = $compactCommandPayload | & $claudeHook.command @($claudeHook.args)
+    $compactCommandJson = ($compactCommandRaw -join "`n") | ConvertFrom-Json
+    Assert-True ([string]::IsNullOrWhiteSpace([string]$compactCommandJson.decision)) "/compact command was blocked"
+
+    $preCompactHook = $claudeSettings.hooks.PreCompact[0].hooks[0]
+    $preCompactPayload = @{
+      cwd = $guardRepo
+      transcript_path = $guardTranscript
+      hook_event_name = "PreCompact"
+      trigger = "manual"
+    } | ConvertTo-Json -Compress
+    $preCompactRaw = $preCompactPayload | & $preCompactHook.command @($preCompactHook.args)
+    Assert-True ($LASTEXITCODE -eq 0) "PreCompact hook failed: $($preCompactRaw -join "`n")"
+
+    $postCompactHook = $claudeSettings.hooks.PostCompact[0].hooks[0]
+    $postCompactPayload = @{
+      cwd = $guardRepo
+      transcript_path = $guardTranscript
+      hook_event_name = "PostCompact"
+      compact_summary = "guard compact summary"
+    } | ConvertTo-Json -Compress
+    $postCompactRaw = $postCompactPayload | & $postCompactHook.command @($postCompactHook.args)
+    Assert-True ($LASTEXITCODE -eq 0) "PostCompact hook failed: $($postCompactRaw -join "`n")"
+
+    $afterCompactRaw = $blockedPayload | & $claudeHook.command @($claudeHook.args)
+    $afterCompactJson = ($afterCompactRaw -join "`n") | ConvertFrom-Json
+    Assert-True ([string]::IsNullOrWhiteSpace([string]$afterCompactJson.decision)) "prompt remained blocked after compact boundary"
+
     $codexHook = $codexHooks.hooks.SessionStart[0].hooks[0]
     $codexCommand = [string]$codexHook.command
     $codexWindowsCommand = [string]$codexHook.commandWindows

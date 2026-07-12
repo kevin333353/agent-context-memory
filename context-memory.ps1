@@ -410,6 +410,7 @@ function Invoke-InstallCommandFor([string]$TargetName) {
       Set-HookEvent $settings.hooks "UserPromptSubmit" "" $hook
       Set-HookEvent $settings.hooks "SessionStart" "startup|resume|clear|compact" $hook
       Set-HookEvent $settings.hooks "SubagentStart" "" $hook
+      Set-HookEvent $settings.hooks "PreCompact" "" $hook
       Set-HookEvent $settings.hooks "PostCompact" "" $hook
       Write-JsonObject $settingsPath $settings
       Install-ContextMemorySkill "claude"
@@ -509,7 +510,7 @@ function Invoke-UninstallCommandFor([string]$TargetName) {
       }
 
       $removed = 0
-      foreach ($event in $events) {
+      foreach ($event in @($events + "PreCompact")) {
         $removed += Remove-HookEvent $settings.hooks $event
       }
 

@@ -70,6 +70,7 @@ function ConvertTo-ContextMemoryEvent([string]$frameworkEvent) {
     "UserPromptSubmit" { return "user_prompt_submit" }
     "SessionStart" { return "session_start" }
     "SubagentStart" { return "subagent_start" }
+    "PreCompact" { return "pre_compact" }
     "PostCompact" { return "post_compact" }
     default {
       if ([string]::IsNullOrWhiteSpace($frameworkEvent)) {
@@ -85,6 +86,7 @@ function ConvertTo-FrameworkEvent([string]$protocolEvent) {
     "user_prompt_submit" { return "UserPromptSubmit" }
     "session_start" { return "SessionStart" }
     "subagent_start" { return "SubagentStart" }
+    "pre_compact" { return "PreCompact" }
     "post_compact" { return "PostCompact" }
     default { return $protocolEvent }
   }
@@ -455,6 +457,31 @@ function Save-ContextMemoryCompactSummary($inputObj, [string]$memoryRoot) {
   return $true
 }
 
+function Invoke-ContextMemorySessionGuard($inputObj, [string]$memoryRoot, [string]$adapterName) {
+  if ($adapterName -ne "claude-code" -or -not $inputObj -or -not $memoryRoot) {
+    return $null
+  }
+  $pythonPath = Get-ContextMemoryPythonPath
+  $guardScript = Join-Path $script:ContextMemoryCoreRoot "scripts\context_memory_session_guard.py"
+  if (-not $pythonPath -or -not (Test-Path -LiteralPath $guardScript)) {
+    Write-ContextMemoryDiagnostic $memoryRoot "single-session guard skipped: runtime unavailable"
+    return $null
+  }
+  try {
+    $eventJson = $inputObj | ConvertTo-Json -Depth 12 -Compress
+    $eventB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($eventJson))
+    $output = & $pythonPath $guardScript --memory-root $memoryRoot --event-b64 $eventB64 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+      Write-ContextMemoryDiagnostic $memoryRoot "single-session guard failed with exit code $LASTEXITCODE"
+      return $null
+    }
+    return ($output | ConvertFrom-Json)
+  } catch {
+    Write-ContextMemoryDiagnostic $memoryRoot "single-session guard failed: $($_.Exception.Message)"
+    return $null
+  }
+}
+
 function Invoke-ContextMemoryProtocol {
   param(
     [ValidateSet("auto", "init", "inject", "post-compact")]
@@ -521,8 +548,27 @@ function Invoke-ContextMemoryProtocol {
     $memoryRoot = Invoke-ContextMemoryAutoInit $cwd
   }
 
+  if ($Mode -eq "auto" -and $event -eq "pre_compact") {
+    $guard = Invoke-ContextMemorySessionGuard $inputObj $memoryRoot $AdapterName
+    $journaled = Write-ContextMemoryJournal $inputObj $memoryRoot $event $frameworkEvent $cwd $AdapterName "pre_compact"
+    return @{
+      protocol = "context-memory/v1"
+      action = "pre_compact"
+      event = $event
+      framework_event = $frameworkEvent
+      cwd = $cwd
+      memory_root = $memoryRoot
+      context = $null
+      journaled = $journaled
+      guard = $guard
+      block = $false
+      block_reason = ""
+    }
+  }
+
   if ($Mode -eq "post-compact" -or ($Mode -eq "auto" -and $event -eq "post_compact")) {
     $saved = Save-ContextMemoryCompactSummary $inputObj $memoryRoot
+    $guard = Invoke-ContextMemorySessionGuard $inputObj $memoryRoot $AdapterName
     $action = $(if ($saved) { "saved_compact" } else { "none" })
     $journaled = Write-ContextMemoryJournal $inputObj $memoryRoot $event $frameworkEvent $cwd $AdapterName $action
     return @{
@@ -534,6 +580,9 @@ function Invoke-ContextMemoryProtocol {
       memory_root = $memoryRoot
       context = $null
       journaled = $journaled
+      guard = $guard
+      block = $false
+      block_reason = ""
     }
   }
 
@@ -565,7 +614,16 @@ function Invoke-ContextMemoryProtocol {
     }
   }
 
-  $journaled = Write-ContextMemoryJournal $inputObj $memoryRoot $event $frameworkEvent $cwd $AdapterName "inject"
+  $guard = Invoke-ContextMemorySessionGuard $inputObj $memoryRoot $AdapterName
+  $block = $false
+  $blockReason = ""
+  if ($guard -and [bool]$guard.should_block) {
+    $block = $true
+    $observed = ([int64]$guard.observed_tokens).ToString("N0")
+    $threshold = ([int64]$guard.effective_threshold).ToString("N0")
+    $blockReason = "Claude context is $observed input tokens, above the $threshold single-session guard. Run /compact preserve current goals, decisions, changed files, test results, blockers, and next steps; then resubmit the prompt."
+  }
+  $journaled = Write-ContextMemoryJournal $inputObj $memoryRoot $event $frameworkEvent $cwd $AdapterName $(if ($block) { "blocked_for_compact" } else { "inject" })
   return @{
     protocol = "context-memory/v1"
     action = "inject"
@@ -575,5 +633,8 @@ function Invoke-ContextMemoryProtocol {
     memory_root = $memoryRoot
     context = $contextText
     journaled = $journaled
+    guard = $guard
+    block = $block
+    block_reason = $blockReason
   }
 }

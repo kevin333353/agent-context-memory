@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
+import argparse
+import base64
 import json
 import os
 from pathlib import Path
+
+import yaml
 
 
 STATE_VERSION = 1
@@ -174,3 +178,65 @@ def mark_compact_boundary(transcript: Path, state_path: Path, event: str) -> dic
         state["compact_offset"] = 0
     save_state(state_path, state)
     return state
+
+
+def handle_hook_event(memory_root: Path, event: dict) -> dict:
+    config_path = memory_root / "config.yaml"
+    try:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8-sig")) or {}
+    except (OSError, ValueError, TypeError, yaml.YAMLError):
+        config = {}
+    guard_config = config.get("single_session_guard", {}) or {}
+    framework_event = str(event.get("hook_event_name") or event.get("event") or "")
+    transcript_value = str(event.get("transcript_path") or "")
+    transcript = Path(transcript_value) if transcript_value else Path("__missing__")
+    state_path = memory_root / "single-session-guard.json"
+
+    if framework_event == "UserPromptSubmit":
+        return evaluate_guard(
+            transcript,
+            state_path,
+            guard_config,
+            str(event.get("prompt") or ""),
+        )
+    if framework_event in {"PreCompact", "PostCompact"}:
+        state = mark_compact_boundary(transcript, state_path, framework_event)
+        return {
+            "enabled": bool(guard_config.get("enabled", False)),
+            "should_block": False,
+            "reason": framework_event.lower(),
+            "compact_offset": state["compact_offset"],
+        }
+    if framework_event == "SessionStart" and str(event.get("source") or "") in {
+        "clear",
+        "compact",
+    }:
+        state = mark_compact_boundary(
+            transcript, state_path, str(event.get("source") or "")
+        )
+        return {
+            "enabled": bool(guard_config.get("enabled", False)),
+            "should_block": False,
+            "reason": "session_boundary",
+            "compact_offset": state["compact_offset"],
+        }
+    return {
+        "enabled": bool(guard_config.get("enabled", False)),
+        "should_block": False,
+        "reason": "unhandled_event",
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--memory-root", required=True)
+    parser.add_argument("--event-b64", required=True)
+    args = parser.parse_args()
+    event = json.loads(base64.b64decode(args.event_b64).decode("utf-8"))
+    result = handle_hook_event(Path(args.memory_root), event)
+    print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
