@@ -155,7 +155,7 @@ function Install-Repository {
 function Install-ManagedPython {
   $python = Get-ContextMemoryCompatiblePythonPath
   if ([string]::IsNullOrWhiteSpace($python)) {
-    throw "找不到可用的 Python。Agent Context Memory v0.2.1 需要 Python 3.9 以上。"
+    throw "找不到可用的 Python。Agent Context Memory v0.2.2 需要 Python 3.9 以上。"
   }
 
   $venvRoot = Join-Path $InstallDir ".venv"

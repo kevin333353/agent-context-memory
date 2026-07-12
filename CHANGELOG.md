@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.2 - 2026-07-12
+
+### Fixed
+
+- Windows installation now selects one usable Python 3.9+ executable when
+  multiple `python` applications are present on `PATH`.
+- Unusable Python commands, including inactive WindowsApps aliases, no longer
+  prevent the installer or hook runtime fallback from checking later candidates.
+
 ## 0.2.1 - 2026-07-11
 
 ### Fixed
