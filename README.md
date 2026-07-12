@@ -16,7 +16,7 @@
 
 - 透過 hook 把 `.context-memory/state.yaml` 注入 Claude Code / Codex CLI。
 - 用同一套 `context-memory/v1` protocol 支援不同 agent CLI adapter。
-- 支援 `UserPromptSubmit`、`SessionStart`、`SubagentStart`、`PostCompact`。
+- 支援 `UserPromptSubmit`、`SessionStart`、`SubagentStart`、Claude `PreCompact` 與 `PostCompact`。
 - 把 hook 事件寫進 `.context-memory/events.sqlite`，方便之後用背景 worker 整理記憶表。
 - 提供 synthetic benchmark 與 Claude Code transcript usage report，量測 token savings。
 
@@ -27,7 +27,7 @@
 在 PowerShell 裡執行這一行：
 
 ```powershell
-$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.2.2^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.2.2
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.3.0^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.3.0
 ```
 
 這條命令會先用 `git clone` 下載固定版本的 installer，再用 `-File` 執行本機檔案；不要用 `iex` 直接執行遠端內容，Windows PowerShell 對 `param(...)`、UTF-8 BOM、中文輸出會比較容易踩到邊界問題。
@@ -50,20 +50,20 @@ $d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -
 - 之後第一次進入其他 git repo 時，hook 會安全地自動初始化該 repo
 - 若有初始化專案，最後執行 `validate` / `doctor` 做檢查
 
-舊版安裝指令是固定版本 pin，不會自動變成新版。已安裝 `v0.1.8`、`v0.2.0` 或 `v0.2.1` 的使用者需要把 tag 與 `-Branch` 都改成 `v0.2.2`，再執行一次上面的新版指令。不要修改或重用舊 tag，否則同一條安裝命令將失去可重現性。
+舊版安裝指令是固定版本 pin，不會自動變成新版。已安裝 `v0.1.8`、`v0.2.0`、`v0.2.1` 或 `v0.2.2` 的使用者需要把 tag 與 `-Branch` 都改成 `v0.3.0`，再執行一次上面的新版指令。不要修改或重用舊 tag，否則同一條安裝命令將失去可重現性。
 
 Auto-init 只會作用在有效 git repository root，不會在工具 repo、使用者家目錄、TEMP 或一般非 git 目錄建立檔案。若某個 repo 不應啟用，先在 repo root 建立 `.context-memory-disabled`。
 
 如果只想安裝工具與 hooks，不想初始化目前專案：
 
 ```powershell
-$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.2.2^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.2.2 -NoProjectInit
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.3.0^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.3.0 -NoProjectInit
 ```
 
 如果要明確指定專案：
 
 ```powershell
-$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.2.2^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.2.2 -ProjectDir "D:\your-project"
+$d="$env:TEMP\agent-context-memory-installer"; if (Test-Path $d) { Remove-Item -Recurse -Force $d }; git clone --quiet https://github.com/kevin333353/agent-context-memory.git $d; git -c advice.detachedHead=false -C $d checkout -q "refs/tags/v0.3.0^{commit}"; powershell -NoProfile -ExecutionPolicy Bypass -File "$d\install.ps1" -Branch v0.3.0 -ProjectDir "D:\your-project"
 ```
 
 ### Linux / macOS
@@ -141,7 +141,7 @@ context-memory doctor -Cwd <repo-root>
 
 Windows 上 Claude Code hook 會使用 exec-form `command` + `args`，直接呼叫 Windows PowerShell，避免被 Git Bash/MSYS 包一層後出現 `add_item errno 1`。
 
-如果 Codex 開新對話時顯示 `SessionStart hook (failed)`，先更新到 `v0.2.2` 並重新安裝 Codex hook，再執行 `doctor` 查看持久 diagnostics：
+如果 Codex 開新對話時顯示 `SessionStart hook (failed)`，先更新到 `v0.3.0` 並重新安裝 Codex hook，再執行 `doctor` 查看持久 diagnostics：
 
 ```powershell
 context-memory install codex
@@ -187,6 +187,28 @@ context-memory resume -Cwd <repo-root>
 ```
 
 把輸出的中文 resume prompt 貼到新 session。若 hook 正常，新 session 也會自動看到 `<CONTEXT_MEMORY_STATE>`；resume prompt 的作用是提醒 agent 優先使用記憶表，不要重讀完整舊 transcript。
+
+## Claude Code 單一 Session Guard
+
+這是每個 repo 獨立啟用的 opt-in 功能。預設在上一個 Claude provider request 的 input-side usage 達到 40,000 tokens 時，先 checkpoint 記憶，再阻擋下一個一般 prompt 並提示執行 `/compact`：
+
+```powershell
+context-memory single-session enable -Cwd <repo-root> -ThresholdTokens 40000
+context-memory single-session status -Cwd <repo-root>
+context-memory single-session disable -Cwd <repo-root>
+```
+
+啟用後會在該 repo 的 `.claude/settings.local.json` 設定 `autoCompactWindow: 100000` 作為最後保護，且不覆蓋其他 Claude 設定。停用時只有在該值仍由 context-memory 管理的情況下才會還原原值；使用者後來手動修改過的值會保留。
+
+Guard 顯示提示後，在 Claude Code 執行：
+
+```text
+/compact preserve current goals, decisions, changed files, test results, blockers, and next steps
+```
+
+完成後重新送出原本的 prompt。`PreCompact` hook 會嘗試同步更新 `state.yaml`，`PostCompact` 會保存 compact summary 並解除阻擋。若 transcript usage、checkpoint runtime 或 guard state 無法讀取，hook 會 fail open，不會讓 Claude Code 卡住。
+
+40,000 是 provider input-side raw tokens，不是帳單 token。計算包含 `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`；prompt cache 的費率與實際帳單節省必須分開評估。
 
 ## Prompt 裡的理想分層
 

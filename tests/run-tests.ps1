@@ -180,7 +180,7 @@ try {
   Assert-True ($cliInit.ExitCode -eq 0) "cli init exited $($cliInit.ExitCode): $($cliInit.Stdout)"
   $cliVersion = Invoke-Cli "version"
   Assert-True ($cliVersion.ExitCode -eq 0) "cli version exited $($cliVersion.ExitCode): $($cliVersion.Stdout)"
-  Assert-True ($cliVersion.Stdout.Trim() -eq "0.2.2") "cli version did not report 0.2.2"
+  Assert-True ($cliVersion.Stdout.Trim() -eq "0.3.0") "cli version did not report 0.3.0"
   $gitignoreText = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $TempRoot ".gitignore")
   Assert-True ($gitignoreText.Contains("!.context-memory/schema.yaml")) "cli init did not add team-safe gitignore rules"
   Assert-True ($gitignoreText.Contains(".context-memory/metadata.json")) "cli init did not ignore local metadata"
@@ -384,6 +384,21 @@ try {
     $afterCompactRaw = $blockedPayload | & $claudeHook.command @($claudeHook.args)
     $afterCompactJson = ($afterCompactRaw -join "`n") | ConvertFrom-Json
     Assert-True ([string]::IsNullOrWhiteSpace([string]$afterCompactJson.decision)) "prompt remained blocked after compact boundary"
+
+    $guardDoctor = Invoke-Cli "doctor" "-Cwd" $guardRepo
+    Assert-True ($guardDoctor.ExitCode -eq 0) "guard doctor failed: $($guardDoctor.Stdout)"
+    Assert-True ($guardDoctor.Stdout.Contains("Single-session guard: enabled")) "doctor did not report enabled guard"
+    Assert-True ($guardDoctor.Stdout.Contains("Guard threshold: 40000")) "doctor did not report guard threshold"
+    Assert-True ($guardDoctor.Stdout.Contains("Auto-compact window: 100000")) "doctor did not report auto compact window"
+    $oldAutoCompactOverride = $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    try {
+      $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = "200000"
+      $overrideDoctor = Invoke-Cli "doctor" "-Cwd" $guardRepo
+      Assert-True ($overrideDoctor.ExitCode -eq 0) "override doctor failed: $($overrideDoctor.Stdout)"
+      Assert-True ($overrideDoctor.Stdout.Contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW overrides project-local auto compact")) "doctor did not report environment override"
+    } finally {
+      $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = $oldAutoCompactOverride
+    }
 
     $codexHook = $codexHooks.hooks.SessionStart[0].hooks[0]
     $codexCommand = [string]$codexHook.command

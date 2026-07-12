@@ -738,6 +738,31 @@ function Invoke-DoctorCommand {
       $warnings++
     }
 
+    if ($pythonPath -and (Test-Path -LiteralPath $runtimeScript)) {
+      try {
+        $guardStatusOutput = & $pythonPath $runtimeScript single-session --project-root $projectRoot --tool-root $ToolRoot --action status --threshold-tokens 40000 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+          throw $guardStatusOutput
+        }
+        $guardStatus = $guardStatusOutput | ConvertFrom-Json
+        Write-Check "pass" "Single-session guard: $(if ($guardStatus.enabled) { 'enabled' } else { 'disabled' })"
+        Write-Check "pass" "Guard threshold: $($guardStatus.threshold_tokens); effective threshold: $($guardStatus.effective_threshold); last observed: $(if ($null -eq $guardStatus.last_observed_tokens) { 'not_observed' } else { $guardStatus.last_observed_tokens })"
+        if ($guardStatus.enabled -and $guardStatus.auto_compact_managed) {
+          Write-Check "pass" "Auto-compact window: $($guardStatus.auto_compact_window_tokens)"
+        } elseif ($guardStatus.enabled) {
+          Write-Check "warn" "Auto-compact window is not managed at $($guardStatus.auto_compact_window_tokens)"
+          $warnings++
+        }
+        if ($guardStatus.environment_override) {
+          Write-Check "warn" "CLAUDE_CODE_AUTO_COMPACT_WINDOW overrides project-local auto compact"
+          $warnings++
+        }
+      } catch {
+        Write-Check "fail" "Single-session guard status is unreadable"
+        $failures++
+      }
+    }
+
     foreach ($lockName in @("worker.lock", "init.lock")) {
       $lockPath = Join-Path $memoryRoot $lockName
       if (Test-Path -LiteralPath $lockPath) {
@@ -777,6 +802,12 @@ function Invoke-DoctorCommand {
       } else {
         Write-Check "warn" "Claude Code hook may use shell command string; Windows Git Bash can fail"
         $warnings++
+      }
+      if ($claude.hooks -and $claude.hooks.PSObject.Properties["PreCompact"]) {
+        $preCompactManaged = @($claude.hooks.PreCompact) | ForEach-Object { @($_.hooks) } | Where-Object { Test-ContextMemoryHook $_ }
+        if (@($preCompactManaged).Count -gt 0) {
+          Write-Check "pass" "Claude Code PreCompact checkpoint hook is installed"
+        }
       }
       if ($claude.enabledPlugins -and $claude.enabledPlugins.PSObject.Properties["claude-mem@thedotmack"] -and $claude.enabledPlugins."claude-mem@thedotmack" -eq $true) {
         Write-Check "warn" "claude-mem@thedotmack is enabled; avoid double memory injection"

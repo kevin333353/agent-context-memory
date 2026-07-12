@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.0 - 2026-07-12
+
+### Added
+
+- An opt-in, per-repository Claude Code single-session guard with a configurable
+  provider-input threshold and compact-loop protection.
+- Reversible project-local `autoCompactWindow` management with a 100k fallback.
+- `PreCompact` checkpointing and `PostCompact` guard reset support.
+- `context-memory single-session enable|status|disable` commands and doctor
+  diagnostics for thresholds, observed tokens, and environment overrides.
+
+### Changed
+
+- Claude Code can block a normal prompt at the configured threshold and show an
+  exact `/compact` recovery command; missing usage or checkpoint failures remain
+  fail-open.
+- Installed Claude guidance keeps large logs, searches, and reports in subagents
+  or artifacts so the main session receives only short summaries.
+
 ## 0.2.2 - 2026-07-12
 
 ### Fixed
