@@ -9,12 +9,17 @@ $ErrorActionPreference = "SilentlyContinue"
 
 $result = Invoke-ContextMemoryProtocol -Mode $Mode -InputRaw $InputRaw -AdapterName "claude-code"
 if ($result.action -eq "inject" -and $result.context) {
-  @{
+  $output = @{
     hookSpecificOutput = @{
       hookEventName = $result.framework_event
       additionalContext = $result.context
     }
-  } | ConvertTo-Json -Depth 8 -Compress
+  }
+  if ($result.block) {
+    $output.decision = "block"
+    $output.reason = $result.block_reason
+  }
+  $output | ConvertTo-Json -Depth 8 -Compress
 } elseif ($result.action -eq "initialized") {
   Write-Output "Initialized $($result.memory_root)"
 }

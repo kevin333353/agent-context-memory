@@ -180,7 +180,7 @@ try {
   Assert-True ($cliInit.ExitCode -eq 0) "cli init exited $($cliInit.ExitCode): $($cliInit.Stdout)"
   $cliVersion = Invoke-Cli "version"
   Assert-True ($cliVersion.ExitCode -eq 0) "cli version exited $($cliVersion.ExitCode): $($cliVersion.Stdout)"
-  Assert-True ($cliVersion.Stdout.Trim() -eq "0.2.2") "cli version did not report 0.2.2"
+  Assert-True ($cliVersion.Stdout.Trim() -eq "0.3.0") "cli version did not report 0.3.0"
   $gitignoreText = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $TempRoot ".gitignore")
   Assert-True ($gitignoreText.Contains("!.context-memory/schema.yaml")) "cli init did not add team-safe gitignore rules"
   Assert-True ($gitignoreText.Contains(".context-memory/metadata.json")) "cli init did not ignore local metadata"
@@ -255,6 +255,40 @@ try {
   $oldUserProfile = $env:USERPROFILE
   try {
     $env:USERPROFILE = $TempRoot
+    $guardRepo = Join-Path $TempRoot "single-session-repo"
+    New-Item -ItemType Directory -Force -Path $guardRepo | Out-Null
+    & git -C $guardRepo init --quiet
+    $guardClaudeDir = Join-Path $guardRepo ".claude"
+    New-Item -ItemType Directory -Force -Path $guardClaudeDir | Out-Null
+    @{
+      permissions = @{ allow = @("Read") }
+      autoCompactWindow = 200000
+    } | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $guardClaudeDir "settings.local.json")
+
+    $guardEnable = Invoke-Cli "single-session" "enable" "-Cwd" $guardRepo "-ThresholdTokens" "45000"
+    Assert-True ($guardEnable.ExitCode -eq 0) "single-session enable exited $($guardEnable.ExitCode): $($guardEnable.Stdout)"
+    Assert-True ($guardEnable.Stdout.Contains("Single-session guard: enabled")) "enable did not report enabled state"
+    Assert-True ($guardEnable.Stdout.Contains("Threshold tokens: 45000")) "enable did not report custom threshold"
+    $guardConfig = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $guardRepo ".context-memory\config.yaml")
+    Assert-True ($guardConfig.Contains("threshold_tokens: 45000")) "enable did not persist threshold"
+    Assert-True ($guardConfig.Contains("enabled: true")) "enable did not persist enabled state"
+    $guardLocalSettings = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $guardClaudeDir "settings.local.json") | ConvertFrom-Json
+    Assert-True ([int]$guardLocalSettings.autoCompactWindow -eq 100000) "enable did not set project-local auto compact"
+    Assert-True ($guardLocalSettings.permissions.allow -contains "Read") "enable replaced unrelated project-local settings"
+    $guardGitignore = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $guardRepo ".gitignore")
+    Assert-True ($guardGitignore.Contains(".context-memory/single-session-guard.json")) "enable did not ignore local guard state"
+
+    $guardStatus = Invoke-Cli "single-session" "status" "-Cwd" $guardRepo
+    Assert-True ($guardStatus.ExitCode -eq 0) "single-session status exited $($guardStatus.ExitCode): $($guardStatus.Stdout)"
+    Assert-True ($guardStatus.Stdout.Contains("Single-session guard: enabled")) "status did not report enabled state"
+    Assert-True ($guardStatus.Stdout.Contains("Auto-compact window: 100000")) "status did not report auto compact window"
+
+    $guardDisable = Invoke-Cli "single-session" "disable" "-Cwd" $guardRepo
+    Assert-True ($guardDisable.ExitCode -eq 0) "single-session disable exited $($guardDisable.ExitCode): $($guardDisable.Stdout)"
+    Assert-True ($guardDisable.Stdout.Contains("Single-session guard: disabled")) "disable did not report disabled state"
+    $guardRestoredSettings = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $guardClaudeDir "settings.local.json") | ConvertFrom-Json
+    Assert-True ([int]$guardRestoredSettings.autoCompactWindow -eq 200000) "disable did not restore project-local auto compact"
+
     $installHooks = Invoke-Cli "install" "all"
     Assert-True ($installHooks.ExitCode -eq 0) "cli install all exited $($installHooks.ExitCode): $($installHooks.Stdout)"
     $claudeSettingsPath = Join-Path $TempRoot ".claude\settings.json"
@@ -269,7 +303,117 @@ try {
     $codexHooksText = Get-Content -Raw -Encoding UTF8 -LiteralPath $codexHooksPath
     Assert-True ($claudeSettingsText.Contains("context-memory-hook.ps1")) "claude hook did not reference context-memory"
     Assert-True ($codexHooksText.Contains("context-memory-hook.ps1")) "codex hook did not reference context-memory"
+    $claudeSettings = $claudeSettingsText | ConvertFrom-Json
     $codexHooks = $codexHooksText | ConvertFrom-Json
+    Assert-True ($claudeSettings.hooks.PSObject.Properties["PreCompact"] -ne $null) "Claude hooks did not install PreCompact"
+    Assert-True ($codexHooks.hooks.PSObject.Properties["PreCompact"] -eq $null) "Codex hooks should not install Claude-only PreCompact"
+
+    $disabledPreCompactHook = $claudeSettings.hooks.PreCompact[0].hooks[0]
+    $disabledPreCompactPayload = @{
+      cwd = $autoRepo
+      transcript_path = (Join-Path $autoRepo "disabled-guard.jsonl")
+      hook_event_name = "PreCompact"
+      trigger = "manual"
+    } | ConvertTo-Json -Compress
+    $eventsBeforeDisabledPreCompact = & $countEvents $autoJournalPath
+    $disabledPreCompactRaw = $disabledPreCompactPayload | & $disabledPreCompactHook.command @($disabledPreCompactHook.args)
+    $eventsAfterDisabledPreCompact = & $countEvents $autoJournalPath
+    Assert-True ($LASTEXITCODE -eq 0) "disabled PreCompact hook failed: $($disabledPreCompactRaw -join "`n")"
+    Assert-True ($eventsAfterDisabledPreCompact -eq $eventsBeforeDisabledPreCompact) "disabled PreCompact changed the journal"
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $autoRepo ".context-memory\single-session-guard.json"))) "disabled PreCompact created guard state"
+
+    $guardEnableForHooks = Invoke-Cli "single-session" "enable" "-Cwd" $guardRepo "-ThresholdTokens" "40000"
+    Assert-True ($guardEnableForHooks.ExitCode -eq 0) "guard hook enable failed: $($guardEnableForHooks.Stdout)"
+    $claudeSettings = Get-Content -Raw -Encoding UTF8 -LiteralPath $claudeSettingsPath | ConvertFrom-Json
+    $claudeHook = $claudeSettings.hooks.UserPromptSubmit[0].hooks[0]
+    $guardTranscript = Join-Path $guardRepo "guard-session.jsonl"
+    $guardUtf8 = [System.Text.UTF8Encoding]::new($false)
+    $belowRecord = @{
+      requestId = "below"
+      message = @{ usage = @{ input_tokens = 2; cache_creation_input_tokens = 559; cache_read_input_tokens = 39438 } }
+    } | ConvertTo-Json -Depth 8 -Compress
+    [System.IO.File]::WriteAllText($guardTranscript, $belowRecord + "`n", $guardUtf8)
+    $belowPayload = @{
+      cwd = $guardRepo
+      transcript_path = $guardTranscript
+      hook_event_name = "UserPromptSubmit"
+      prompt = "continue below threshold"
+    } | ConvertTo-Json -Compress
+    $belowRaw = $belowPayload | & $claudeHook.command @($claudeHook.args)
+    $belowExit = $LASTEXITCODE
+    $belowJson = ($belowRaw -join "`n") | ConvertFrom-Json
+    Assert-True ($belowExit -eq 0) "below-threshold Claude hook exited $belowExit"
+    Assert-True ($belowJson.hookSpecificOutput.additionalContext.Contains("<CONTEXT_MEMORY_STATE")) "below-threshold hook did not inject"
+    Assert-True ([string]::IsNullOrWhiteSpace([string]$belowJson.decision)) "below-threshold hook unexpectedly blocked"
+
+    $highRecord = @{
+      requestId = "high"
+      message = @{ usage = @{ input_tokens = 2; cache_creation_input_tokens = 559; cache_read_input_tokens = 44131 } }
+    } | ConvertTo-Json -Depth 8 -Compress
+    [System.IO.File]::WriteAllText($guardTranscript, $highRecord + "`n", $guardUtf8)
+    $blockedPayload = @{
+      cwd = $guardRepo
+      transcript_path = $guardTranscript
+      hook_event_name = "UserPromptSubmit"
+      prompt = "continue above threshold"
+    } | ConvertTo-Json -Compress
+    $blockedRaw = $blockedPayload | & $claudeHook.command @($claudeHook.args)
+    $blockedExit = $LASTEXITCODE
+    $blockedJson = ($blockedRaw -join "`n") | ConvertFrom-Json
+    Assert-True ($blockedExit -eq 0) "blocked Claude hook exited $blockedExit"
+    Assert-True ($blockedJson.decision -eq "block") "Claude guard did not block above threshold"
+    Assert-True ($blockedJson.reason.Contains("44,692")) "block reason omitted observed tokens"
+    Assert-True ($blockedJson.reason.Contains("/compact")) "block reason omitted compact command"
+
+    $compactCommandPayload = @{
+      cwd = $guardRepo
+      transcript_path = $guardTranscript
+      hook_event_name = "UserPromptSubmit"
+      prompt = "/compact preserve goals decisions files tests and next steps"
+    } | ConvertTo-Json -Compress
+    $compactCommandRaw = $compactCommandPayload | & $claudeHook.command @($claudeHook.args)
+    $compactCommandJson = ($compactCommandRaw -join "`n") | ConvertFrom-Json
+    Assert-True ([string]::IsNullOrWhiteSpace([string]$compactCommandJson.decision)) "/compact command was blocked"
+
+    $preCompactHook = $claudeSettings.hooks.PreCompact[0].hooks[0]
+    $preCompactPayload = @{
+      cwd = $guardRepo
+      transcript_path = $guardTranscript
+      hook_event_name = "PreCompact"
+      trigger = "manual"
+    } | ConvertTo-Json -Compress
+    $preCompactRaw = $preCompactPayload | & $preCompactHook.command @($preCompactHook.args)
+    Assert-True ($LASTEXITCODE -eq 0) "PreCompact hook failed: $($preCompactRaw -join "`n")"
+
+    $postCompactHook = $claudeSettings.hooks.PostCompact[0].hooks[0]
+    $postCompactPayload = @{
+      cwd = $guardRepo
+      transcript_path = $guardTranscript
+      hook_event_name = "PostCompact"
+      compact_summary = "guard compact summary"
+    } | ConvertTo-Json -Compress
+    $postCompactRaw = $postCompactPayload | & $postCompactHook.command @($postCompactHook.args)
+    Assert-True ($LASTEXITCODE -eq 0) "PostCompact hook failed: $($postCompactRaw -join "`n")"
+
+    $afterCompactRaw = $blockedPayload | & $claudeHook.command @($claudeHook.args)
+    $afterCompactJson = ($afterCompactRaw -join "`n") | ConvertFrom-Json
+    Assert-True ([string]::IsNullOrWhiteSpace([string]$afterCompactJson.decision)) "prompt remained blocked after compact boundary"
+
+    $guardDoctor = Invoke-Cli "doctor" "-Cwd" $guardRepo
+    Assert-True ($guardDoctor.ExitCode -eq 0) "guard doctor failed: $($guardDoctor.Stdout)"
+    Assert-True ($guardDoctor.Stdout.Contains("Single-session guard: enabled")) "doctor did not report enabled guard"
+    Assert-True ($guardDoctor.Stdout.Contains("Guard threshold: 40000")) "doctor did not report guard threshold"
+    Assert-True ($guardDoctor.Stdout.Contains("Auto-compact window: 100000")) "doctor did not report auto compact window"
+    $oldAutoCompactOverride = $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    try {
+      $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = "200000"
+      $overrideDoctor = Invoke-Cli "doctor" "-Cwd" $guardRepo
+      Assert-True ($overrideDoctor.ExitCode -eq 0) "override doctor failed: $($overrideDoctor.Stdout)"
+      Assert-True ($overrideDoctor.Stdout.Contains("CLAUDE_CODE_AUTO_COMPACT_WINDOW overrides project-local auto compact")) "doctor did not report environment override"
+    } finally {
+      $env:CLAUDE_CODE_AUTO_COMPACT_WINDOW = $oldAutoCompactOverride
+    }
+
     $codexHook = $codexHooks.hooks.SessionStart[0].hooks[0]
     $codexCommand = [string]$codexHook.command
     $codexWindowsCommand = [string]$codexHook.commandWindows

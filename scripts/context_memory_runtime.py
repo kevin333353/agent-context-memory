@@ -20,12 +20,16 @@ import yaml
 
 try:
     from scripts.context_memory_state import validate_state_yaml
+    from scripts.context_memory_session_guard import load_state as load_guard_state
+    from scripts.context_memory_session_guard import save_state as save_guard_state
 except ImportError:
     from context_memory_state import validate_state_yaml
+    from context_memory_session_guard import load_state as load_guard_state
+    from context_memory_session_guard import save_state as save_guard_state
 
 
 DEFAULT_CONFIG = {
-    "schema_version": 2,
+    "schema_version": 3,
     "auto_init": {
         "enabled": True,
         "update_gitignore": True,
@@ -49,6 +53,13 @@ DEFAULT_CONFIG = {
             "max_event_age_days": 7,
             "max_event_count": 500,
         },
+    },
+    "single_session_guard": {
+        "enabled": False,
+        "threshold_tokens": 40000,
+        "min_growth_after_compact_tokens": 10000,
+        "block_on_threshold": True,
+        "auto_compact_window_tokens": 100000,
     },
 }
 
@@ -86,6 +97,8 @@ GITIGNORE_BLOCK = """# context-memory: shared files
 .context-memory/events.sqlite
 .context-memory/metadata.json
 .context-memory/diagnostics.log
+.context-memory/single-session-guard.json
+.claude/settings.local.json
 .context-memory/*.lock
 .context-memory/*.tmp
 .context-memory/*.bak-*
@@ -126,7 +139,7 @@ def migrate_config_file(path: Path) -> dict:
         parsed = {}
     old_version = int(parsed.get("schema_version") or 1)
     migrated = _deep_merge(DEFAULT_CONFIG, parsed)
-    migrated["schema_version"] = 2
+    migrated["schema_version"] = 3
     old_worker = parsed.get("fill_table", {}).get("worker", {}) or {}
     if old_version < 2 and old_worker.get("status") == "not_installed":
         migrated["fill_table"]["worker"].update(DEFAULT_CONFIG["fill_table"]["worker"])
@@ -138,6 +151,127 @@ def migrate_config_file(path: Path) -> dict:
         temp_path.write_text(serialized, encoding="utf-8")
         os.replace(temp_path, path)
     return migrated
+
+
+def _write_yaml_atomic(path: Path, value: dict) -> None:
+    serialized = yaml.safe_dump(value, allow_unicode=True, sort_keys=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(path.name + ".tmp")
+    temp_path.write_text(serialized, encoding="utf-8")
+    os.replace(temp_path, path)
+
+
+def _read_json_object(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8-sig") or "{}")
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"{path} must contain valid JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return parsed
+
+
+def _write_json_atomic(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(path.name + ".tmp")
+    temp_path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    os.replace(temp_path, path)
+
+
+def configure_single_session(
+    project_root: Path, tool_root: Path, action: str, threshold_tokens: int
+) -> dict:
+    project_root = project_root.resolve()
+    memory_root = project_root / ".context-memory"
+    if action == "enable":
+        memory_root = initialize_memory(
+            project_root, tool_root, update_gitignore=True, origin="manual"
+        )
+    elif not memory_root.is_dir():
+        raise ValueError(f"Context memory is not initialized: {memory_root}")
+
+    config_path = memory_root / "config.yaml"
+    config = migrate_config_file(config_path)
+    guard_config = config["single_session_guard"]
+    state_path = memory_root / "single-session-guard.json"
+    state = load_guard_state(state_path)
+    settings_path = project_root / ".claude" / "settings.local.json"
+    settings = _read_json_object(settings_path)
+    managed_value = int(guard_config.get("auto_compact_window_tokens") or 100000)
+
+    if action == "enable":
+        guard_config["enabled"] = True
+        guard_config["threshold_tokens"] = max(1, int(threshold_tokens))
+        ownership = state.get("settings_ownership") or {}
+        if not bool(ownership.get("managed")):
+            ownership = {
+                "managed": True,
+                "managed_value": managed_value,
+                "previous_existed": "autoCompactWindow" in settings,
+                "previous_value": settings.get("autoCompactWindow"),
+            }
+        state["settings_ownership"] = ownership
+        settings["autoCompactWindow"] = managed_value
+        _write_yaml_atomic(config_path, config)
+        _write_json_atomic(settings_path, settings)
+        save_guard_state(state_path, state)
+        result_action = "enabled"
+        settings_restored = False
+        settings_preserved = False
+    elif action == "disable":
+        guard_config["enabled"] = False
+        ownership = state.get("settings_ownership") or {}
+        current = settings.get("autoCompactWindow")
+        managed = ownership.get("managed_value", managed_value)
+        settings_restored = False
+        settings_preserved = False
+        if bool(ownership.get("managed")):
+            if current == managed:
+                if bool(ownership.get("previous_existed")):
+                    settings["autoCompactWindow"] = ownership.get("previous_value")
+                else:
+                    settings.pop("autoCompactWindow", None)
+                _write_json_atomic(settings_path, settings)
+                settings_restored = True
+            else:
+                settings_preserved = True
+        state["settings_ownership"] = {}
+        _write_yaml_atomic(config_path, config)
+        save_guard_state(state_path, state)
+        result_action = "disabled"
+    elif action == "status":
+        result_action = "status"
+        settings_restored = False
+        settings_preserved = False
+    else:
+        raise ValueError(f"Unknown single-session action: {action}")
+
+    baseline = state.get("post_compact_baseline_tokens")
+    threshold = int(guard_config.get("threshold_tokens") or 40000)
+    growth = int(guard_config.get("min_growth_after_compact_tokens") or 10000)
+    effective = max(threshold, int(baseline) + growth) if baseline is not None else threshold
+    ownership = state.get("settings_ownership") or {}
+    return {
+        "action": result_action,
+        "project_root": str(project_root),
+        "memory_root": str(memory_root),
+        "enabled": bool(guard_config.get("enabled", False)),
+        "threshold_tokens": threshold,
+        "post_compact_baseline_tokens": baseline,
+        "last_observed_tokens": state.get("last_observed_tokens"),
+        "effective_threshold": effective,
+        "auto_compact_window_tokens": managed_value,
+        "auto_compact_managed": bool(ownership.get("managed"))
+        and settings.get("autoCompactWindow") == managed_value,
+        "environment_override": bool(os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")),
+        "settings_restored": settings_restored,
+        "settings_preserved": settings_preserved,
+        "settings_path": str(settings_path),
+    }
 
 
 def find_git_root(cwd: Path) -> Path | None:
@@ -249,6 +383,17 @@ def ensure_gitignore(project_root: Path) -> None:
     path = project_root / ".gitignore"
     existing = path.read_text(encoding="utf-8-sig") if path.exists() else ""
     if "!.context-memory/schema.yaml" in existing:
+        required = (
+            ".context-memory/single-session-guard.json",
+            ".claude/settings.local.json",
+        )
+        existing_lines = {line.strip() for line in existing.splitlines()}
+        missing = [line for line in required if line not in existing_lines]
+        if missing:
+            path.write_text(
+                existing.rstrip() + "\n" + "\n".join(missing) + "\n",
+                encoding="utf-8",
+            )
         return
     prefix = existing.rstrip()
     combined = f"{prefix}\n\n{GITIGNORE_BLOCK}" if prefix else GITIGNORE_BLOCK
@@ -386,6 +531,11 @@ def main() -> int:
     read_parser.add_argument("--memory-root", required=True)
     journal_parser = subparsers.add_parser("journal-path")
     journal_parser.add_argument("--memory-root", required=True)
+    single_parser = subparsers.add_parser("single-session")
+    single_parser.add_argument("--project-root", required=True)
+    single_parser.add_argument("--tool-root", required=True)
+    single_parser.add_argument("--action", choices=("enable", "status", "disable"), required=True)
+    single_parser.add_argument("--threshold-tokens", type=int, default=40000)
     args = parser.parse_args()
     if args.command == "auto-init":
         result = auto_initialize(Path(args.cwd), Path(args.tool_root))
@@ -408,6 +558,19 @@ def main() -> int:
         print(
             json.dumps(
                 read_valid_state(Path(args.memory_root)),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+    elif args.command == "single-session":
+        print(
+            json.dumps(
+                configure_single_session(
+                    Path(args.project_root),
+                    Path(args.tool_root),
+                    args.action,
+                    args.threshold_tokens,
+                ),
                 ensure_ascii=False,
                 separators=(",", ":"),
             )

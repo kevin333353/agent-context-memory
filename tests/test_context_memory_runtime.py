@@ -138,7 +138,7 @@ fill_table:
 
         migrated = runtime.migrate_config_file(config_path)
 
-        self.assertEqual(migrated["schema_version"], 2)
+        self.assertEqual(migrated["schema_version"], 3)
         self.assertTrue(migrated["fill_table"]["worker"]["auto_run"])
         self.assertEqual(migrated["fill_table"]["worker"]["status"], "managed")
         self.assertTrue(migrated["fill_table"]["journal"]["capture_prompts"])
@@ -146,6 +146,129 @@ fill_table:
             migrated["fill_table"]["adapters"]["codex-cli"]["routine_model"],
             "custom-routine",
         )
+
+    def test_schema_three_adds_disabled_single_session_guard(self):
+        self.require_runtime()
+        config_path = self.root / "config.yaml"
+        config_path.write_text("schema_version: 2\n", encoding="utf-8")
+
+        migrated = runtime.migrate_config_file(config_path)
+
+        self.assertEqual(migrated["schema_version"], 3)
+        self.assertEqual(
+            migrated["single_session_guard"],
+            {
+                "enabled": False,
+                "threshold_tokens": 40000,
+                "min_growth_after_compact_tokens": 10000,
+                "block_on_threshold": True,
+                "auto_compact_window_tokens": 100000,
+            },
+        )
+
+    def test_single_session_enable_is_idempotent_and_disable_restores_settings(self):
+        self.require_runtime()
+        repo = self.make_git_repo()
+        memory_root = repo / ".context-memory"
+        settings_path = repo / ".claude" / "settings.local.json"
+        settings_path.parent.mkdir(parents=True)
+        settings_path.write_text(
+            json.dumps(
+                {
+                    "permissions": {"allow": ["Read"]},
+                    "autoCompactWindow": 200000,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        enabled = runtime.configure_single_session(
+            repo, self.tool_root, "enable", 45000
+        )
+        enabled_again = runtime.configure_single_session(
+            repo, self.tool_root, "enable", 45000
+        )
+
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        state = json.loads(
+            (memory_root / "single-session-guard.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        config = runtime.load_config(memory_root / "config.yaml")
+        self.assertEqual(enabled["action"], "enabled")
+        self.assertEqual(enabled_again["action"], "enabled")
+        self.assertEqual(settings["permissions"], {"allow": ["Read"]})
+        self.assertEqual(settings["autoCompactWindow"], 100000)
+        self.assertEqual(state["settings_ownership"]["previous_value"], 200000)
+        self.assertTrue(state["settings_ownership"]["previous_existed"])
+        self.assertTrue(config["single_session_guard"]["enabled"])
+        self.assertEqual(config["single_session_guard"]["threshold_tokens"], 45000)
+
+        disabled = runtime.configure_single_session(
+            repo, self.tool_root, "disable", 40000
+        )
+
+        restored = json.loads(settings_path.read_text(encoding="utf-8"))
+        self.assertEqual(disabled["action"], "disabled")
+        self.assertTrue(disabled["settings_restored"])
+        self.assertEqual(restored["autoCompactWindow"], 200000)
+        self.assertEqual(restored["permissions"], {"allow": ["Read"]})
+
+    def test_single_session_disable_preserves_user_changed_setting(self):
+        self.require_runtime()
+        repo = self.make_git_repo()
+        runtime.configure_single_session(repo, self.tool_root, "enable", 40000)
+        settings_path = repo / ".claude" / "settings.local.json"
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        settings["autoCompactWindow"] = 300000
+        settings_path.write_text(json.dumps(settings), encoding="utf-8")
+
+        disabled = runtime.configure_single_session(
+            repo, self.tool_root, "disable", 40000
+        )
+
+        preserved = json.loads(settings_path.read_text(encoding="utf-8"))
+        self.assertFalse(disabled["settings_restored"])
+        self.assertTrue(disabled["settings_preserved"])
+        self.assertEqual(preserved["autoCompactWindow"], 300000)
+
+    def test_single_session_status_reports_runtime_state(self):
+        self.require_runtime()
+        repo = self.make_git_repo()
+        memory_root = repo / ".context-memory"
+        runtime.configure_single_session(repo, self.tool_root, "enable", 40000)
+        state_path = memory_root / "single-session-guard.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["last_observed_tokens"] = 44692
+        state["post_compact_baseline_tokens"] = 35000
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        status = runtime.configure_single_session(
+            repo, self.tool_root, "status", 40000
+        )
+
+        self.assertTrue(status["enabled"])
+        self.assertEqual(status["threshold_tokens"], 40000)
+        self.assertEqual(status["last_observed_tokens"], 44692)
+        self.assertEqual(status["post_compact_baseline_tokens"], 35000)
+        self.assertEqual(status["effective_threshold"], 45000)
+        self.assertTrue(status["auto_compact_managed"])
+
+    def test_gitignore_migration_adds_new_local_guard_rules(self):
+        self.require_runtime()
+        repo = self.make_git_repo()
+        gitignore = repo / ".gitignore"
+        gitignore.write_text(
+            "!.context-memory/schema.yaml\n.context-memory/events.sqlite\n",
+            encoding="utf-8",
+        )
+
+        runtime.ensure_gitignore(repo)
+
+        updated = gitignore.read_text(encoding="utf-8")
+        self.assertIn(".context-memory/single-session-guard.json", updated)
+        self.assertIn(".claude/settings.local.json", updated)
 
     def test_exclusive_lock_recovers_stale_file(self):
         self.require_runtime()

@@ -23,6 +23,7 @@ The stable contract is `context-memory/v1`; individual agent CLIs are thin adapt
 | `.context-memory/history.md` | Append-only compact/session summaries |
 | `.context-memory/last-compact.md` | Most recent compact summary captured by hook |
 | `.context-memory/events.sqlite` | Lightweight event journal for background summarization |
+| `.context-memory/single-session-guard.json` | Local Claude session threshold and compact-boundary state |
 
 ## Workflow
 
@@ -34,6 +35,17 @@ The stable contract is `context-memory/v1`; individual agent CLIs are thin adapt
 5. Keep stable interpretation rules above dynamic state. Put frequently changing details near the bottom to preserve prompt-cache prefixes.
 6. Do not paste large logs or full conversations into memory. Store summaries plus file paths.
 7. Use the configured fill-table cascade for background summarization: Claude Code routine `haiku`, repair `sonnet`; Codex routine `gpt-5-nano`, repair `gpt-5-mini`.
+
+## Single-Session Discipline
+
+When the repository enables `single_session_guard`, keep the main Claude Code
+thread compact before the threshold is reached:
+
+1. Delegate large searches, broad code inspection, and independent investigations to subagents.
+2. Write long test output, logs, diffs, and reports to artifacts; return only the path and a short actionable summary.
+3. When the guard blocks a prompt, run the exact `/compact` command it provides, then resubmit the original prompt.
+4. After compact, use the injected memory table and compact summary instead of replaying the discarded transcript.
+5. Do not claim raw provider-input reduction is identical to billed-cost savings; prompt-cache pricing remains separate.
 
 ## Update Standard
 

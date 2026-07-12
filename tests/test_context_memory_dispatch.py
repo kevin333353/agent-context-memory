@@ -85,6 +85,44 @@ class ContextMemoryDispatchTests(unittest.TestCase):
         self.assertTrue(result["dispatch_due"])
         self.assertEqual(result["dispatch_reason"], "post_compact")
 
+    def test_pre_compact_forces_dispatch(self):
+        self.require_dispatch()
+        self.config["fill_table"]["summary_interval_turns"] = 99
+
+        result = dispatch.record_and_maybe_dispatch(
+            self.memory_root,
+            "claude-code",
+            self.event("pre_compact"),
+            self.config,
+            TOOL_ROOT,
+            lambda *args: True,
+        )
+
+        self.assertTrue(result["dispatch_due"])
+        self.assertEqual(result["dispatch_reason"], "pre_compact")
+
+    def test_synchronous_worker_uses_existing_locked_runner(self):
+        self.require_dispatch()
+        expected = {"status": "no_change", "cursor": 3}
+        with patch.object(dispatch, "run_worker_locked", return_value=expected) as run:
+            result = dispatch.run_worker_synchronously(
+                self.memory_root, "claude-code", TOOL_ROOT
+            )
+
+        self.assertEqual(result, expected)
+        run.assert_called_once_with(self.memory_root, "claude-code", TOOL_ROOT)
+
+    def test_synchronous_worker_honors_disable_environment(self):
+        self.require_dispatch()
+        with patch.dict(os.environ, {"CONTEXT_MEMORY_DISABLE_WORKER_DISPATCH": "1"}):
+            with patch.object(dispatch, "run_worker_locked") as run:
+                result = dispatch.run_worker_synchronously(
+                    self.memory_root, "claude-code", TOOL_ROOT
+                )
+
+        self.assertEqual(result["status"], "disabled_env")
+        run.assert_not_called()
+
     def test_disable_environment_prevents_launch_but_still_journals(self):
         self.require_dispatch()
         self.config["fill_table"]["summary_interval_turns"] = 1
