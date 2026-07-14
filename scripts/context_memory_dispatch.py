@@ -42,6 +42,19 @@ def _parse_utc(value: str) -> datetime | None:
         return None
 
 
+def parse_event_payload(event_b64: str | None, event_json: str | None) -> dict:
+    if event_b64:
+        payload = base64.b64decode(event_b64).decode("utf-8")
+    elif event_json:
+        payload = event_json
+    else:
+        raise ValueError("Missing hook event payload")
+    event = json.loads(payload)
+    if not isinstance(event, dict):
+        raise ValueError("Hook event payload must be a JSON object")
+    return event
+
+
 def append_diagnostic(tool_root: Path, memory_root: Path | None, message: str) -> None:
     if memory_root:
         path = memory_root / "diagnostics.log"
@@ -196,7 +209,9 @@ def main() -> int:
     record_parser.add_argument("--memory-root", required=True)
     record_parser.add_argument("--adapter", required=True)
     record_parser.add_argument("--tool-root", required=True)
-    record_parser.add_argument("--event-b64", required=True)
+    event_source = record_parser.add_mutually_exclusive_group(required=True)
+    event_source.add_argument("--event-b64")
+    event_source.add_argument("--event-stdin", action="store_true")
 
     worker_parser = subparsers.add_parser("run-worker")
     worker_parser.add_argument("--memory-root", required=True)
@@ -211,7 +226,10 @@ def main() -> int:
     memory_root = Path(args.memory_root)
     tool_root = Path(args.tool_root)
     if args.command == "record-and-dispatch":
-        event = json.loads(base64.b64decode(args.event_b64).decode("utf-8"))
+        event = parse_event_payload(
+            args.event_b64,
+            sys.stdin.read() if args.event_stdin else None,
+        )
         config = migrate_config_file(memory_root / "config.yaml")
         result = record_and_maybe_dispatch(
             memory_root, args.adapter, event, config, tool_root

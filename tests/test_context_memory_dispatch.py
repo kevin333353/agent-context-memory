@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import tempfile
 import unittest
@@ -191,6 +192,15 @@ class ContextMemoryDispatchTests(unittest.TestCase):
         self.assertTrue(result["journaled"])
         self.assertTrue(expected.exists())
         self.assertFalse((self.memory_root / "events.sqlite").exists())
+
+    def test_event_payload_accepts_large_json_from_stdin(self):
+        self.require_dispatch()
+        event = self.event()
+        event["prompt"] = "x" * 100_000
+
+        parsed = dispatch.parse_event_payload(None, json.dumps(event))
+
+        self.assertEqual(parsed["prompt"], event["prompt"])
 
 
 if __name__ == "__main__":
