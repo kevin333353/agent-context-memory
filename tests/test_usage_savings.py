@@ -20,6 +20,11 @@ SIMULATOR_JSON = {
         "saved_total_tokens": 348005,
         "saved_percent": 86.09,
     },
+    "all_turns": [
+        {"turn": 1, "saved_percent": -314.66},
+        {"turn": 2, "saved_percent": -40.0},
+        {"turn": 30, "saved_percent": 92.38},
+    ],
 }
 
 AB_JSON = {
@@ -47,6 +52,15 @@ class SavingsParseTests(unittest.TestCase):
         self.assertEqual(r.baseline_tokens, 404250)
         self.assertEqual(r.memory_tokens, 56245)
         self.assertEqual(r.memory_root, "/repo")
+
+    def test_simulator_detail_includes_turn_series(self):
+        r = savings_module.savings_from_simulator(SIMULATOR_JSON)
+        detail = json.loads(r.detail)
+        self.assertIn("turns", detail)
+        self.assertEqual(detail["turns"][0]["t"], 1)
+        self.assertAlmostEqual(detail["turns"][0]["p"], -314.66)
+        self.assertEqual(detail["turns"][-1]["t"], 30)
+        self.assertAlmostEqual(detail["turns"][-1]["p"], 92.38)
 
     def test_savings_from_ab_maps_summary_and_provider(self):
         r = savings_module.savings_from_ab(

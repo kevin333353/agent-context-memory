@@ -165,6 +165,11 @@ INDEX_HTML = """<!doctype html>
   .src .sub{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
   .mini{height:6px;border-radius:3px;background:var(--track);overflow:hidden;margin:12px 0 4px}
   .mini>span{display:block;height:100%;background:var(--c);width:0;transition:width 1s ease}
+  /* turns chart */
+  .chartwrap{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px 10px}
+  .chart-note{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:2px;line-height:1.5}
+  .chart-empty{font-family:var(--mono);font-size:12px;color:var(--muted);padding:30px;text-align:center}
+  #turnsChart svg circle[fill="transparent"]{cursor:crosshair}
   /* tables */
   .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
   table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px}
@@ -229,6 +234,13 @@ INDEX_HTML = """<!doctype html>
 
   <div class="tiles" id="tiles"></div>
 
+  <section class="blk"><h2>省下% vs 對話回合數 · 估算</h2>
+    <div class="chartwrap">
+      <div id="turnsChart"></div>
+      <div class="chart-note">越多輪，baseline（完整 transcript）越大、精簡 state 幾乎持平 → 省下% 上升後趨於高原；短對話因 state 固定成本會先倒虧（曲線低於 0%）。離線上限估算，非帳單。</div>
+    </div>
+  </section>
+
   <section class="blk"><h2>Sources · Claude vs Codex</h2><div class="srcgrid" id="srcgrid"></div></section>
   <section class="blk"><h2>By model</h2><div class="tablewrap"><table id="models"></table></div></section>
   <section class="blk"><h2>Recent requests</h2><div class="tablewrap"><table id="events"></table></div></section>
@@ -251,6 +263,38 @@ const pct=r=>((r||0)*100).toFixed(1);
 const SRC={claude:"var(--claude)",codex:"var(--codex)"};
 const j=async u=>(await fetch(B+u)).json();
 const el=(t,h)=>{const e=document.createElement(t);e.innerHTML=h;return e;};
+
+function drawTurns(sim){
+  const host=document.getElementById("turnsChart");
+  let turns=[];
+  try{ turns=(JSON.parse((sim&&sim.detail)||"{}").turns)||[]; }catch(e){}
+  if(!sim||!turns.length){host.innerHTML='<div class="chart-empty">尚無估算資料 · 跑 simulator 產生</div>';return;}
+  const W=760,H=210,pl=48,pr=60,pt=16,pb=28, iw=W-pl-pr, ih=H-pt-pb;
+  const D0=-100,D1=100;                      // fixed display domain (%), clamp outliers
+  const xs=turns.map(d=>d.t), xmin=Math.min(...xs), xmax=Math.max(...xs);
+  const X=t=>pl+(xmax===xmin?0:(t-xmin)/(xmax-xmin))*iw;
+  const Yc=p=>pt+(1-(Math.max(D0,Math.min(D1,p))-D0)/(D1-D0))*ih;
+  const path=turns.map((d,i)=>(i?"L":"M")+X(d.t).toFixed(1)+" "+Yc(d.p).toFixed(1)).join(" ");
+  let g="";
+  [100,50,0,-50,-100].forEach(v=>{const y=Yc(v).toFixed(1);
+    g+=`<line x1="${pl}" y1="${y}" x2="${pl+iw}" y2="${y}" style="stroke:var(--line)" stroke-width="${v===0?1.5:1}" ${v===0?"":'stroke-dasharray="2 4"'}/>`;
+    g+=`<text x="${pl-8}" y="${(+y+3).toFixed(1)}" text-anchor="end" style="fill:var(--muted)" font-size="10">${v}%</text>`;});
+  const be=turns.find(d=>d.p>=0); let beM="";
+  if(be){const bx=X(be.t).toFixed(1);
+    beM=`<line x1="${bx}" y1="${pt}" x2="${bx}" y2="${pt+ih}" style="stroke:var(--muted)" stroke-width="1" stroke-dasharray="2 3" opacity=".55"/>`
+      +`<text x="${bx}" y="${pt+11}" text-anchor="middle" style="fill:var(--muted)" font-size="9">損益兩平 ~第${be.t}輪</text>`;}
+  let pts="";
+  turns.forEach(d=>{const x=X(d.t).toFixed(1),y=Yc(d.p).toFixed(1);
+    pts+=`<circle cx="${x}" cy="${y}" r="8" fill="transparent"><title>第 ${d.t} 輪：${d.p}%</title></circle>`;
+    pts+=`<circle cx="${x}" cy="${y}" r="2.3" style="fill:var(--save)"/>`;
+    if(d.p<D0) pts+=`<text x="${x}" y="${(+y-6)}" text-anchor="middle" style="fill:var(--muted)" font-size="9">${d.p}%↓</text>`;});
+  const last=turns[turns.length-1];
+  const endL=`<text x="${(X(last.t)+7).toFixed(1)}" y="${(Yc(last.p)+4).toFixed(1)}" style="fill:var(--save);font-weight:600" font-size="12">${last.p.toFixed(0)}%</text>`;
+  const xl=`<text x="${X(xmin)}" y="${H-8}" text-anchor="middle" style="fill:var(--muted)" font-size="10">第${xmin}輪</text>`
+    +`<text x="${(pl+iw/2)}" y="${H-8}" text-anchor="middle" style="fill:var(--muted)" font-size="10">對話回合數 →</text>`
+    +`<text x="${X(xmax)}" y="${H-8}" text-anchor="middle" style="fill:var(--muted)" font-size="10">第${xmax}輪</text>`;
+  host.innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="工具省下百分比隨對話回合數變化的趨勢">${g}${beM}<path d="${path}" fill="none" style="stroke:var(--save)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>${pts}${endL}${xl}</svg>`;
+}
 
 async function load(){
   const s=await j("/api/summary"), o=s.overall;
@@ -278,6 +322,7 @@ async function load(){
   document.getElementById("abMeta").innerHTML=abHas
     ?`${sv.ab.provider||"?"} · ${sv.ab.task||"?"} · 品質${sv.ab.quality_pass?"通過":"未過"} · ${cfmt(sv.ab.baseline_tokens)}→${cfmt(sv.ab.memory_tokens)}`
     :"開/關工具同任務實測";
+  drawTurns(sv.simulate);
 
   const sp=(o.cache_savings_pct||0)*100;
   document.getElementById("savePct").textContent=sp.toFixed(1);

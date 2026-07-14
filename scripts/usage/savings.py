@@ -43,6 +43,12 @@ def savings_from_simulator(
     ts_utc: Optional[str] = None, dedupe_key: Optional[str] = None,
 ) -> UsageSavings:
     s = result.get("summary") or {}
+    turns = [
+        {"t": int(t.get("turn")), "p": round(float(t.get("saved_percent") or 0.0), 2)}
+        for t in (result.get("all_turns") or [])
+        if t.get("turn") is not None
+    ]
+    detail = {"assumptions": result.get("assumptions") or {}, "turns": turns}
     return UsageSavings(
         ts_utc=ts_utc or _now(),
         kind="simulate",
@@ -50,7 +56,7 @@ def savings_from_simulator(
         baseline_tokens=int(s.get("baseline_total_tokens") or 0),
         memory_tokens=int(s.get("memory_total_tokens") or 0),
         memory_root=memory_root,
-        detail=json.dumps(result.get("assumptions") or {}, ensure_ascii=False),
+        detail=json.dumps(detail, ensure_ascii=False),
         dedupe_key=dedupe_key,
     )
 
@@ -81,7 +87,8 @@ def savings_from_ab(
 def run_simulator(state_path: Path, python: Optional[str] = None,
                   extra_args: Optional[list] = None) -> dict:
     script = _tool_root() / "benchmarks" / "simulate-token-savings.py"
-    cmd = [python or sys.executable, str(script), "--state", str(state_path)]
+    cmd = [python or sys.executable, str(script), "--state", str(state_path),
+           "--include-turns"]
     cmd += list(extra_args or [])
     out = subprocess.run(cmd, capture_output=True, text=True, check=True,
                          encoding="utf-8")
