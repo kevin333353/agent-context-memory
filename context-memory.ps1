@@ -3,6 +3,8 @@
   [string]$Command = "help",
   [Parameter(Position = 1)]
   [string]$Target = "",
+  [Parameter(Position = 2)]
+  [string]$SubTarget = "",
   [string]$Cwd = (Get-Location).Path,
   [int]$TokenLimit = 2000,
   [int]$ThresholdTokens = 40000,
