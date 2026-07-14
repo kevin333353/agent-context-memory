@@ -52,6 +52,60 @@ class UsageRecord:
         return (self.cache_read_tokens / total) if total else 0.0
 
 
+@dataclass
+class UsageIntervention:
+    """One context-memory-caused compaction, measured before/after.
+
+    ``before_tokens`` is the true running context size (total input tokens,
+    incl. cached) observed right before a compaction boundary; ``after_tokens``
+    is the first post-compact baseline. Unlike prompt-cache savings — which
+    Anthropic applies regardless of this tool — this is directly attributable
+    to the tool forcing the compaction.
+    """
+
+    ts_utc: str
+    source: str = "claude"
+    kind: str = "compact"
+    memory_root: Optional[str] = None
+    before_tokens: int = 0
+    after_tokens: int = 0
+    dedupe_key: Optional[str] = None
+
+    def saved_tokens(self) -> int:
+        return max(0, self.before_tokens - self.after_tokens)
+
+    def compression_ratio(self) -> float:
+        return (self.saved_tokens() / self.before_tokens) if self.before_tokens > 0 else 0.0
+
+
+@dataclass
+class UsageSavings:
+    """One measurement of what agent-context-memory itself saves.
+
+    Unlike prompt-cache or compaction stats, this compares the tool's mechanism
+    (a compact ``state.yaml`` block) against the baseline of carrying the full
+    running transcript. Two kinds:
+
+    - ``simulate``  offline upper-bound estimate (``simulate-token-savings.py``)
+    - ``ab``        real provider A/B, tool on vs off (``provider-ab-benchmark.py``)
+    """
+
+    ts_utc: str
+    kind: str                          # 'simulate' | 'ab'
+    saved_percent: float = 0.0
+    baseline_tokens: int = 0
+    memory_tokens: int = 0
+    memory_root: Optional[str] = None
+    provider: Optional[str] = None     # ab only: 'claude' | 'codex'
+    task: Optional[str] = None         # ab only: 'recall' | 'coding'
+    quality_pass: Optional[int] = None  # ab only: 1/0
+    detail: Optional[str] = None       # raw JSON for drill-down
+    dedupe_key: Optional[str] = None
+
+    def saved_tokens(self) -> int:
+        return max(0, self.baseline_tokens - self.memory_tokens)
+
+
 _CREATE = """
 CREATE TABLE IF NOT EXISTS usage_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +126,34 @@ CREATE TABLE IF NOT EXISTS usage_events (
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_events(ts_utc);
 CREATE INDEX IF NOT EXISTS idx_usage_source ON usage_events(source);
 CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_events(session_id);
+CREATE TABLE IF NOT EXISTS interventions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_utc TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'claude',
+    kind TEXT NOT NULL DEFAULT 'compact',
+    memory_root TEXT,
+    before_tokens INTEGER NOT NULL DEFAULT 0,
+    after_tokens INTEGER NOT NULL DEFAULT 0,
+    saved_tokens INTEGER NOT NULL DEFAULT 0,
+    dedupe_key TEXT UNIQUE
+);
+CREATE INDEX IF NOT EXISTS idx_interv_ts ON interventions(ts_utc);
+CREATE TABLE IF NOT EXISTS savings_estimates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts_utc TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    saved_percent REAL NOT NULL DEFAULT 0,
+    baseline_tokens INTEGER NOT NULL DEFAULT 0,
+    memory_tokens INTEGER NOT NULL DEFAULT 0,
+    saved_tokens INTEGER NOT NULL DEFAULT 0,
+    memory_root TEXT,
+    provider TEXT,
+    task TEXT,
+    quality_pass INTEGER,
+    detail TEXT,
+    dedupe_key TEXT UNIQUE
+);
+CREATE INDEX IF NOT EXISTS idx_savings_kind ON savings_estimates(kind);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -202,6 +284,98 @@ class UsageStore:
 
     def count(self) -> int:
         return int(self._fetchone("SELECT COUNT(*) FROM usage_events")[0])
+
+    # ---- tool interventions (forced compactions) -------------------------
+
+    def record_intervention(self, rec: "UsageIntervention") -> bool:
+        """Insert one intervention. Idempotent on ``dedupe_key`` like record()."""
+        saved = rec.saved_tokens()
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO interventions "
+                    "(ts_utc, source, kind, memory_root, before_tokens, "
+                    " after_tokens, saved_tokens, dedupe_key) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (rec.ts_utc, rec.source, rec.kind, rec.memory_root,
+                     rec.before_tokens, rec.after_tokens, saved, rec.dedupe_key),
+                )
+                self._conn.commit()
+                return True
+            except sqlite3.IntegrityError:
+                return False
+
+    def intervention_summary(self) -> dict:
+        row = self._fetchone(
+            """
+            SELECT COUNT(*)                        AS count,
+                   COALESCE(SUM(before_tokens),0)  AS before_tokens,
+                   COALESCE(SUM(after_tokens),0)   AS after_tokens,
+                   COALESCE(SUM(saved_tokens),0)   AS saved_tokens
+            FROM interventions
+            """
+        )
+        d = dict(row)
+        before = d["before_tokens"]
+        d["compression_pct"] = (d["saved_tokens"] / before) if before else 0.0
+        return d
+
+    def recent_interventions(self, limit: int = 100, offset: int = 0) -> list[dict]:
+        return self._fetchall(
+            """
+            SELECT id, ts_utc, source, kind, memory_root,
+                   before_tokens, after_tokens, saved_tokens
+            FROM interventions ORDER BY id DESC LIMIT ? OFFSET ?
+            """,
+            (int(limit), int(offset)),
+        )
+
+    # ---- tool savings estimates (simulator + provider A/B) ---------------
+
+    def record_savings(self, rec: "UsageSavings") -> bool:
+        """Insert one savings measurement. Idempotent on ``dedupe_key``."""
+        with self._lock:
+            try:
+                self._conn.execute(
+                    "INSERT INTO savings_estimates "
+                    "(ts_utc, kind, saved_percent, baseline_tokens, memory_tokens, "
+                    " saved_tokens, memory_root, provider, task, quality_pass, "
+                    " detail, dedupe_key) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (rec.ts_utc, rec.kind, rec.saved_percent, rec.baseline_tokens,
+                     rec.memory_tokens, rec.saved_tokens(), rec.memory_root,
+                     rec.provider, rec.task, rec.quality_pass, rec.detail,
+                     rec.dedupe_key),
+                )
+                self._conn.commit()
+                return True
+            except sqlite3.IntegrityError:
+                return False
+
+    def latest_savings(self) -> dict:
+        """Most recent row for each kind, as ``{'simulate': row|None, 'ab': row|None}``."""
+        out = {"simulate": None, "ab": None}
+        for kind in out:
+            row = self._fetchone(
+                "SELECT * FROM savings_estimates WHERE kind = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (kind,),
+            )
+            if row is not None:
+                out[kind] = dict(row)
+        return out
+
+    def recent_savings(self, kind: Optional[str] = None, limit: int = 50) -> list[dict]:
+        if kind:
+            return self._fetchall(
+                "SELECT * FROM savings_estimates WHERE kind = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (kind, int(limit)),
+            )
+        return self._fetchall(
+            "SELECT * FROM savings_estimates ORDER BY id DESC LIMIT ?",
+            (int(limit),),
+        )
 
     # ---- tailer offset bookkeeping ---------------------------------------
 

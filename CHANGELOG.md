@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.5.0 - 2026-07-14
+
+### Added
+
+- **Tool-attributable savings on the dashboard**, cleanly separated from
+  Anthropic prompt-cache efficiency. Both compare the tool's mechanism (a compact
+  `state.yaml` block) against the baseline of carrying the full running transcript:
+  - **工具省下 · 估算** — offline upper-bound estimate from
+    `benchmarks/simulate-token-savings.py`.
+  - **工具省下 · 實測 A/B** — real provider A/B (tool on vs off, same task) from
+    `benchmarks/provider-ab-benchmark.py`.
+- New `savings_estimates` table in the usage store with `UsageSavings`,
+  `record_savings`, `latest_savings`, `recent_savings`; `scripts/usage/savings.py`
+  parses either benchmark's JSON and persists it (`python -m usage.savings
+  --db <db> simulate|ab-record …`). `/api/summary` gains a `savings` block.
+- Dashboard reworked to three honest meters: two tool-savings meters above plus
+  the Anthropic prompt-cache meter (explicitly marked *not caused by this tool*).
+
+### Changed
+
+- Dropped the earlier "工具壓縮率" (forced-compaction before/after) meter from the
+  dashboard: a compaction's reduction is mostly Claude Code's native mechanism,
+  not this tool's marginal saving, so presenting it as tool savings overstated the
+  attribution. The guard still records compaction before/after pairs to the
+  `interventions` table as an internal diagnostic, but they are no longer shown as
+  savings.
+
+### Notes
+
+- The estimate is an offline upper bound (assumption-driven); the A/B is a
+  ground-truth token count on a synthetic task. Neither is a billed-cost figure.
+  Example on this repo's own `state.yaml`: estimate ≈ 86%, single claude recall
+  A/B ≈ 59%.
+
 ## 0.4.0 - 2026-07-14
 
 ### Added

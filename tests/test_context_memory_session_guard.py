@@ -172,6 +172,99 @@ class ContextMemorySessionGuardTests(unittest.TestCase):
         self.assertEqual(state["schema_version"], 1)
         self.assertNotIn(prompt, state_text)
 
+    def test_compaction_emits_intervention_pair(self):
+        # Observe a large context before compaction.
+        self.write_record(self.usage_record("before", 480000))
+        guard.evaluate_guard(self.transcript, self.state_path, self.config, "continue")
+        # Compaction happens.
+        guard.mark_compact_boundary(self.transcript, self.state_path, "post_compact")
+        # First post-compact observation establishes baseline + emits the pair.
+        self.write_record(self.usage_record("after", 90000))
+        result = guard.evaluate_guard(
+            self.transcript, self.state_path, self.config, "resubmit"
+        )
+        iv = result.get("intervention")
+        self.assertIsNotNone(iv)
+        self.assertEqual(iv["before_tokens"], 480000)
+        self.assertEqual(iv["after_tokens"], 90000)
+        self.assertEqual(iv["kind"], "compact")
+        self.assertIn("compact_offset", iv)
+
+    def test_intervention_emitted_only_once(self):
+        self.write_record(self.usage_record("before", 480000))
+        guard.evaluate_guard(self.transcript, self.state_path, self.config, "continue")
+        guard.mark_compact_boundary(self.transcript, self.state_path, "post_compact")
+        self.write_record(self.usage_record("after", 90000))
+        first = guard.evaluate_guard(
+            self.transcript, self.state_path, self.config, "resubmit"
+        )
+        self.assertIsNotNone(first.get("intervention"))
+        self.write_record(self.usage_record("after2", 95000))
+        second = guard.evaluate_guard(
+            self.transcript, self.state_path, self.config, "continue"
+        )
+        self.assertIsNone(second.get("intervention"))
+
+    def test_intervention_survives_pre_and_post_compact_boundaries(self):
+        # Claude Code fires BOTH PreCompact and PostCompact around one compaction;
+        # the carried pre-compact size must survive the second reset.
+        self.write_record(self.usage_record("before", 480000))
+        guard.evaluate_guard(self.transcript, self.state_path, self.config, "continue")
+        guard.mark_compact_boundary(self.transcript, self.state_path, "PreCompact")
+        guard.mark_compact_boundary(self.transcript, self.state_path, "PostCompact")
+        self.write_record(self.usage_record("after", 90000))
+        result = guard.evaluate_guard(
+            self.transcript, self.state_path, self.config, "resubmit"
+        )
+        iv = result.get("intervention")
+        self.assertIsNotNone(iv)
+        self.assertEqual(iv["before_tokens"], 480000)
+        self.assertEqual(iv["after_tokens"], 90000)
+
+    def test_clear_boundary_emits_no_intervention(self):
+        self.write_record(self.usage_record("before", 480000))
+        guard.evaluate_guard(self.transcript, self.state_path, self.config, "continue")
+        guard.mark_compact_boundary(self.transcript, self.state_path, "clear")
+        self.write_record(self.usage_record("after", 5000))
+        result = guard.evaluate_guard(
+            self.transcript, self.state_path, self.config, "resubmit"
+        )
+        self.assertIsNone(result.get("intervention"))
+
+    def test_record_intervention_to_store_persisted_and_idempotent(self):
+        from scripts.usage.store import UsageStore
+        db = self.root / "usage.sqlite"
+        iv = {"kind": "compact", "before_tokens": 480000,
+              "after_tokens": 90000, "compact_offset": 123}
+        first = guard.record_intervention_to_store(
+            self.root, "claude", "/t/session.jsonl", iv, db_path=db)
+        self.assertTrue(first)
+        # Same transcript + compact_offset must dedupe (not double-count).
+        again = guard.record_intervention_to_store(
+            self.root, "claude", "/t/session.jsonl", iv, db_path=db)
+        self.assertFalse(again)
+        with UsageStore(db) as s:
+            summ = s.intervention_summary()
+        self.assertEqual(summ["count"], 1)
+        self.assertEqual(summ["saved_tokens"], 390000)
+
+    def test_usage_db_path_is_toolroot_relative_not_home(self):
+        # Interventions must land in the SAME DB the proxy/dashboard read, which
+        # the CLI puts at <ToolRoot>/usage/usage.sqlite. Deriving from the guard
+        # module's own location matches that in every install layout (including
+        # a tool installed into a repo dir rather than the home default).
+        p = guard.resolve_usage_db_path()
+        self.assertEqual(p.name, "usage.sqlite")
+        self.assertEqual(p.parent.name, "usage")
+        guard_file = Path(guard.__file__).resolve()
+        self.assertEqual(p, guard_file.parent.parent / "usage" / "usage.sqlite")
+
+    def test_record_intervention_to_store_never_raises(self):
+        # Malformed intervention must fail open (False), not raise.
+        ok = guard.record_intervention_to_store(
+            self.root, "claude", "/t/s.jsonl", {}, db_path=self.root / "x.sqlite")
+        self.assertFalse(ok)
+
     def test_disabled_compact_event_does_not_create_guard_state(self):
         memory_root = self.root / ".context-memory"
         memory_root.mkdir()

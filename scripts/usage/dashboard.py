@@ -51,6 +51,7 @@ def api_summary(store: UsageStore) -> dict:
     return {
         "overall": overall,
         "by_source": _augment_source_rows(store.by_source()),
+        "savings": store.latest_savings(),
     }
 
 
@@ -91,13 +92,15 @@ INDEX_HTML = """<!doctype html>
   :root{
     --bg:#e7ebf0; --panel:#fdfefe; --ink:#16202b; --muted:#616f7d; --line:#d2d9e1;
     --save:#159a70; --save2:#2fc79a; --track:#dfe4ea;
+    --cache:#4f74c2; --cache2:#6d93e0;
     --claude:#cf8636; --codex:#3a7fd0;
     --mono:ui-monospace,"Cascadia Code","JetBrains Mono",Consolas,Menlo,monospace;
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
   }
   @media (prefers-color-scheme:dark){
     :root{ --bg:#0e131a; --panel:#161d26; --ink:#e6ecf2; --muted:#8a97a6; --line:#232c38;
-           --save:#1fb083; --save2:#3ad3a4; --track:#1d2530; }
+           --save:#1fb083; --save2:#3ad3a4; --track:#1d2530;
+           --cache:#5b82d6; --cache2:#7ba0ef; }
   }
   :root[data-theme="dark"]{ --bg:#0e131a; --panel:#161d26; --ink:#e6ecf2; --muted:#8a97a6;
            --line:#232c38; --save:#1fb083; --save2:#3ad3a4; --track:#1d2530; }
@@ -116,11 +119,18 @@ INDEX_HTML = """<!doctype html>
        box-shadow:0 0 0 0 var(--save);animation:pulse 2.6s infinite}
   @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(31,176,131,.5)}70%{box-shadow:0 0 0 7px rgba(31,176,131,0)}100%{box-shadow:0 0 0 0 rgba(31,176,131,0)}}
   .updated{font-family:var(--mono);font-size:11px;color:var(--muted)}
-  /* hero savings meter */
+  /* hero savings meters */
+  .heroes{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));margin-bottom:18px}
   .hero{background:var(--panel);border:1px solid var(--line);border-radius:16px;
-        padding:24px 26px 22px;margin-bottom:18px}
-  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;
-           color:var(--muted);margin-bottom:16px}
+        padding:22px 24px 20px}
+  .hero.primary{border-color:color-mix(in srgb,var(--save) 40%,var(--line))}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+           color:var(--muted);margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .eyebrow .tag{font-size:9.5px;padding:2px 6px;border-radius:5px;letter-spacing:.06em;
+           background:var(--track);color:var(--ink)}
+  .eyebrow .tag.you{background:color-mix(in srgb,var(--save) 22%,transparent);
+           color:var(--save)}
+  .meter-fill.alt{background:linear-gradient(90deg,var(--cache),var(--cache2))}
   .meter{position:relative;height:74px;border-radius:11px;background:var(--track);
          overflow:hidden;border:1px solid var(--line)}
   .meter-fill{position:absolute;inset:0 auto 0 0;width:0;
@@ -172,19 +182,48 @@ INDEX_HTML = """<!doctype html>
     <div class="updated" id="updated"></div>
   </header>
 
-  <div class="hero">
-    <div class="eyebrow">Cache cost savings · 快取為你省下的 input token 成本</div>
-    <div class="meter">
-      <div class="meter-fill" id="fill"></div>
-      <div class="meter-read">
-        <b id="savePct">–</b><span class="pct">%</span>
-        <span class="cap" id="heroCap"></span>
+  <div class="heroes">
+    <div class="hero primary">
+      <div class="eyebrow"><span class="tag you">context-memory</span>工具省下 · 估算</div>
+      <div class="meter">
+        <div class="meter-fill" id="simFill"></div>
+        <div class="meter-read">
+          <b id="simPct">–</b><span class="pct">%</span>
+          <span class="cap" id="simCap"></span>
+        </div>
+      </div>
+      <div class="legend">
+        <span>完整 transcript <b id="simBase">–</b></span>
+        <span>精簡 state <b id="simMem">–</b></span>
       </div>
     </div>
-    <div class="legend">
-      <span>served from cache <b id="crTok">–</b></span>
-      <span>cache hit <b id="hitPct">–</b></span>
-      <span>baseline input <b id="baseTok">–</b></span>
+    <div class="hero primary">
+      <div class="eyebrow"><span class="tag you">context-memory</span>工具省下 · 實測 A/B</div>
+      <div class="meter">
+        <div class="meter-fill" id="abFill"></div>
+        <div class="meter-read">
+          <b id="abPct">–</b><span class="pct">%</span>
+          <span class="cap" id="abCap"></span>
+        </div>
+      </div>
+      <div class="legend">
+        <span id="abMeta">開/關工具同任務實測</span>
+      </div>
+    </div>
+    <div class="hero">
+      <div class="eyebrow"><span class="tag">Anthropic</span>prompt cache 效率（非本工具造成）</div>
+      <div class="meter">
+        <div class="meter-fill alt" id="fill"></div>
+        <div class="meter-read">
+          <b id="savePct">–</b><span class="pct">%</span>
+          <span class="cap" id="heroCap"></span>
+        </div>
+      </div>
+      <div class="legend">
+        <span>served from cache <b id="crTok">–</b></span>
+        <span>cache hit <b id="hitPct">–</b></span>
+        <span>baseline input <b id="baseTok">–</b></span>
+      </div>
     </div>
   </div>
 
@@ -195,8 +234,10 @@ INDEX_HTML = """<!doctype html>
   <section class="blk"><h2>Recent requests</h2><div class="tablewrap"><table id="events"></table></div></section>
 
   <footer>
-    數字為實際觀測 token。百分比＝快取避免的 input 成本占比（fresh 1×, cache-write 1.25×, cache-read 0.1×）。<br>
-    金額為 Anthropic API 定價換算之參考值，非帳單；proxy 僅本機 loopback 自用。
+    <b>工具省下（估算）</b>＝context-memory 每回合注入精簡 state vs 塞完整 transcript 的 token 差（<code>simulate-token-savings</code>，離線上限估算，非帳單）。<br>
+    <b>工具省下（實測 A/B）</b>＝同一任務開/關工具、真呼叫模型量到的 input token 差（<code>provider-ab-benchmark</code>，ground truth）。<br>
+    <b>快取效率</b>＝Anthropic prompt cache 自動避免的 input 成本占比，<b>與本工具無關</b>（不裝也會有），僅作對照。<br>
+    proxy 僅本機 loopback 自用；金額類數字皆為定價換算之參考值，非帳單。
   </footer>
 </div>
 <script>
@@ -213,6 +254,31 @@ const el=(t,h)=>{const e=document.createElement(t);e.innerHTML=h;return e;};
 
 async function load(){
   const s=await j("/api/summary"), o=s.overall;
+
+  // Tool savings — attributable to context-memory (compact state vs full transcript).
+  const sv=s.savings||{simulate:null,ab:null};
+  const setMeter=(pref,row)=>{
+    const has=row && row.saved_percent!=null;
+    const p=has?Number(row.saved_percent):0;
+    document.getElementById(pref+"Pct").textContent=has?p.toFixed(1):"–";
+    requestAnimationFrame(()=>{document.getElementById(pref+"Fill").style.width=
+      (has?Math.max(2,Math.min(100,p)):0).toFixed(1)+"%";});
+    return has;
+  };
+  const simHas=setMeter("sim",sv.simulate);
+  document.getElementById("simCap").innerHTML=simHas
+    ?"state vs 完整 transcript<br>離線估算 · 上限值"
+    :"尚未量測<br>跑 simulator 產生";
+  document.getElementById("simBase").textContent=simHas?cfmt(sv.simulate.baseline_tokens):"–";
+  document.getElementById("simMem").textContent=simHas?cfmt(sv.simulate.memory_tokens):"–";
+  const abHas=setMeter("ab",sv.ab);
+  document.getElementById("abCap").innerHTML=abHas
+    ?"開/關工具同任務<br>真呼叫模型實測"
+    :"尚未量測<br>跑 provider A/B 產生";
+  document.getElementById("abMeta").innerHTML=abHas
+    ?`${sv.ab.provider||"?"} · ${sv.ab.task||"?"} · 品質${sv.ab.quality_pass?"通過":"未過"} · ${cfmt(sv.ab.baseline_tokens)}→${cfmt(sv.ab.memory_tokens)}`
+    :"開/關工具同任務實測";
+
   const sp=(o.cache_savings_pct||0)*100;
   document.getElementById("savePct").textContent=sp.toFixed(1);
   requestAnimationFrame(()=>{document.getElementById("fill").style.width=Math.max(2,sp).toFixed(1)+"%";});

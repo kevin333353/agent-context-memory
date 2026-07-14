@@ -270,6 +270,20 @@ http://127.0.0.1:8788/__acm/
 - **Codex CLI** 不走 proxy（ChatGPT 訂閱走內部後端、無法乾淨改導向），改讀本機 `~/.codex/sessions/**/rollout-*.jsonl` 的 `token_count` 事件。
 - 兩邊正規化後寫進全域 `usage.sqlite`（`%USERPROFILE%\.agent-context-memory\usage\`），只存 token 數與識別碼，不存任何 prompt/回應內容。
 
+Dashboard 上有三個分開標示的百分比，避免混淆歸因：
+
+- **工具省下 · 估算**：本工具的節省(離線上限估算)。`simulate-token-savings.py` 比較「每回合塞完整 transcript」vs「塞精簡 state」的 token 差。刷新：
+  ```powershell
+  python -m usage.savings --db <usage.sqlite> simulate --state <repo>\.context-memory\state.yaml --memory-root <repo>
+  ```
+- **工具省下 · 實測 A/B**：同一任務開/關工具、真呼叫模型量到的 input token 差(ground truth)。跑 `provider-ab-benchmark.py`(需在**未設 `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY`** 的環境，才會用訂閱登入)後 `ab-record`：
+  ```powershell
+  python -m usage.savings --db <usage.sqlite> ab-record --result <result.json> --memory-root <repo>
+  ```
+- **快取效率**：Anthropic prompt cache 自動避免的 input 成本占比，**與本工具無關**（不裝也會有），僅作對照。
+
+兩個「工具省下」皆為 token 省量估算/實測，非帳單。
+
 其他指令：
 
 ```powershell

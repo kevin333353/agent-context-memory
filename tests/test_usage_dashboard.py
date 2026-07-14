@@ -61,6 +61,27 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("cache_savings_pct", data["overall"])
         self.assertAlmostEqual(sources["claude"]["cache_savings_pct"], 0.425)
 
+    def test_api_summary_includes_savings(self):
+        self.store.record_savings(store_module.UsageSavings(
+            ts_utc="2026-07-14T00:02:00Z", kind="simulate",
+            saved_percent=86.09, baseline_tokens=404250, memory_tokens=56245))
+        self.store.record_savings(store_module.UsageSavings(
+            ts_utc="2026-07-14T00:03:00Z", kind="ab", provider="claude",
+            task="recall", saved_percent=74.0, baseline_tokens=50000,
+            memory_tokens=13000, quality_pass=1))
+        status, ctype, body = self.h("/__acm/api/summary")
+        data = json.loads(body)
+        self.assertIn("savings", data)
+        self.assertAlmostEqual(data["savings"]["simulate"]["saved_percent"], 86.09)
+        self.assertAlmostEqual(data["savings"]["ab"]["saved_percent"], 74.0)
+        self.assertEqual(data["savings"]["ab"]["provider"], "claude")
+
+    def test_api_summary_savings_empty_is_none(self):
+        status, ctype, body = self.h("/__acm/api/summary")
+        data = json.loads(body)
+        self.assertIsNone(data["savings"]["simulate"])
+        self.assertIsNone(data["savings"]["ab"])
+
     def test_api_models(self):
         status, ctype, body = self.h("/__acm/api/models")
         data = json.loads(body)
