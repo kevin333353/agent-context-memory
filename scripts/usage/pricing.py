@@ -34,6 +34,26 @@ def _rates(model: Optional[str]) -> tuple[float, float]:
     return best[1] if best else _DEFAULT
 
 
+def cache_savings_pct(input_tokens: int, cache_creation_tokens: int,
+                      cache_read_tokens: int) -> float:
+    """Provider-agnostic share of input token cost avoided by prompt caching.
+
+    Weights the standard cache economics: fresh input = 1.0x, cache creation =
+    1.25x, cache read = 0.1x. Baseline is every input token paid at full price::
+
+        saved% = (baseline - actual) / baseline
+               = (0.9*cache_read - 0.25*cache_creation) / total_input
+
+    Clamped to >= 0 (a session that only writes cache and never reads it has no
+    savings yet, not negative savings to display).
+    """
+    baseline = input_tokens + cache_creation_tokens + cache_read_tokens
+    if baseline <= 0:
+        return 0.0
+    actual = input_tokens + cache_creation_tokens * 1.25 + cache_read_tokens * 0.10
+    return max(0.0, (baseline - actual) / baseline)
+
+
 def cache_savings_usd(model: Optional[str], cache_read_tokens: int) -> float:
     """Illustrative dollars saved by cache *reads* vs paying full input price.
 

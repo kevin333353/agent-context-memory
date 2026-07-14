@@ -57,6 +57,9 @@ class DashboardTests(unittest.TestCase):
         # claude cache hit ratio = 500 / (400+100+500) = 0.5
         self.assertAlmostEqual(sources["claude"]["cache_hit_ratio"], 0.5)
         self.assertIn("illustrative_cache_savings_usd", sources["claude"])
+        # cost-weighted savings %: (0.9*500 - 0.25*100)/1000 = 0.425
+        self.assertIn("cache_savings_pct", data["overall"])
+        self.assertAlmostEqual(sources["claude"]["cache_savings_pct"], 0.425)
 
     def test_api_models(self):
         status, ctype, body = self.h("/__acm/api/models")

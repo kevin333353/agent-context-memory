@@ -24,14 +24,17 @@ def _json(obj) -> tuple[int, str, bytes]:
 
 def _augment_source_rows(rows: list[dict]) -> list[dict]:
     for r in rows:
+        inp = r.get("input_tokens", 0)
+        cc = r.get("cache_creation_tokens", 0)
+        cr = r.get("cache_read_tokens", 0)
+        total_in = inp + cc + cr
+        r["total_input_tokens"] = total_in
+        r["cache_hit_ratio"] = (cr / total_in) if total_in else 0.0
+        r["cache_savings_pct"] = pricing.cache_savings_pct(inp, cc, cr)
         if r.get("source") == "claude":
             r["illustrative_cache_savings_usd"] = round(
-                pricing.cache_savings_usd(None, r.get("cache_read_tokens", 0)), 4
+                pricing.cache_savings_usd(None, cr), 4
             )
-        total_in = (r.get("input_tokens", 0) + r.get("cache_creation_tokens", 0)
-                    + r.get("cache_read_tokens", 0))
-        r["total_input_tokens"] = total_in
-        r["cache_hit_ratio"] = (r.get("cache_read_tokens", 0) / total_in) if total_in else 0.0
     return rows
 
 
@@ -39,6 +42,11 @@ def api_summary(store: UsageStore) -> dict:
     overall = store.summary()
     overall["illustrative_cache_savings_usd"] = round(
         pricing.cache_savings_usd(None, overall.get("cache_read_tokens", 0)), 4
+    )
+    overall["cache_savings_pct"] = pricing.cache_savings_pct(
+        overall.get("input_tokens", 0),
+        overall.get("cache_creation_tokens", 0),
+        overall.get("cache_read_tokens", 0),
     )
     return {
         "overall": overall,
@@ -80,83 +88,187 @@ INDEX_HTML = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent Context Memory — Usage</title>
 <style>
-  :root { color-scheme: light dark; --fg:#1a1a1a; --bg:#fbfaf7; --mut:#6b6b6b;
-          --card:#ffffff; --line:#e6e3dc; --accent:#c96a3f; --claude:#c96a3f; --codex:#3f7cc9; }
-  @media (prefers-color-scheme: dark) {
-    :root { --fg:#e8e6e1; --bg:#17181a; --mut:#9a9a9a; --card:#212225; --line:#33353a; } }
-  * { box-sizing:border-box; }
-  body { margin:0; font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; color:var(--fg);
-         background:var(--bg); padding:24px; }
-  h1 { font-size:20px; margin:0 0 4px; } .sub { color:var(--mut); font-size:13px; margin:0 0 20px; }
-  .grid { display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); margin-bottom:22px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
-  .k { color:var(--mut); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
-  .v { font-size:24px; font-weight:600; margin-top:4px; } .v small { font-size:13px; color:var(--mut); font-weight:400; }
-  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line);
-          border-radius:10px; overflow:hidden; margin-bottom:22px; font-size:13px; }
-  th,td { text-align:right; padding:8px 12px; border-bottom:1px solid var(--line); }
-  th:first-child,td:first-child { text-align:left; } th { color:var(--mut); font-weight:600; }
-  tr:last-child td { border-bottom:none; }
-  .bar { height:8px; border-radius:4px; background:var(--line); overflow:hidden; }
-  .bar > span { display:block; height:100%; background:var(--accent); }
-  .tag { display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:6px; vertical-align:middle; }
-  .note { color:var(--mut); font-size:12px; margin-top:-12px; margin-bottom:22px; }
-  h2 { font-size:15px; margin:0 0 10px; }
+  :root{
+    --bg:#e7ebf0; --panel:#fdfefe; --ink:#16202b; --muted:#616f7d; --line:#d2d9e1;
+    --save:#159a70; --save2:#2fc79a; --track:#dfe4ea;
+    --claude:#cf8636; --codex:#3a7fd0;
+    --mono:ui-monospace,"Cascadia Code","JetBrains Mono",Consolas,Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#0e131a; --panel:#161d26; --ink:#e6ecf2; --muted:#8a97a6; --line:#232c38;
+           --save:#1fb083; --save2:#3ad3a4; --track:#1d2530; }
+  }
+  :root[data-theme="dark"]{ --bg:#0e131a; --panel:#161d26; --ink:#e6ecf2; --muted:#8a97a6;
+           --line:#232c38; --save:#1fb083; --save2:#3ad3a4; --track:#1d2530; }
+  :root[data-theme="light"]{ --bg:#e7ebf0; --panel:#fdfefe; --ink:#16202b; --muted:#616f7d;
+           --line:#d2d9e1; --save:#159a70; --save2:#2fc79a; --track:#dfe4ea; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+       padding:28px 22px 48px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1040px;margin:0 auto}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  header{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+         margin-bottom:26px;flex-wrap:wrap}
+  .brand{font-family:var(--mono);font-size:12px;letter-spacing:.14em;color:var(--muted);
+         text-transform:uppercase;display:flex;align-items:center;gap:9px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--save);
+       box-shadow:0 0 0 0 var(--save);animation:pulse 2.6s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(31,176,131,.5)}70%{box-shadow:0 0 0 7px rgba(31,176,131,0)}100%{box-shadow:0 0 0 0 rgba(31,176,131,0)}}
+  .updated{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  /* hero savings meter */
+  .hero{background:var(--panel);border:1px solid var(--line);border-radius:16px;
+        padding:24px 26px 22px;margin-bottom:18px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+           color:var(--muted);margin-bottom:16px}
+  .meter{position:relative;height:74px;border-radius:11px;background:var(--track);
+         overflow:hidden;border:1px solid var(--line)}
+  .meter-fill{position:absolute;inset:0 auto 0 0;width:0;
+              background:linear-gradient(90deg,var(--save),var(--save2));
+              transition:width 1.1s cubic-bezier(.2,.7,.2,1)}
+  .meter-read{position:absolute;inset:0;display:flex;align-items:center;
+              padding:0 22px;gap:8px;font-family:var(--mono)}
+  .meter-read b{font-size:44px;font-weight:600;line-height:1;letter-spacing:-.02em;color:#fff;
+                text-shadow:0 1px 2px rgba(0,0,0,.25)}
+  .meter-read .pct{font-size:20px;color:#fff;opacity:.85;align-self:flex-start;margin-top:6px}
+  .meter-read .cap{margin-left:auto;text-align:right;color:#fff;opacity:.9;font-size:12px;
+                   line-height:1.4;text-shadow:0 1px 2px rgba(0,0,0,.3)}
+  .legend{display:flex;gap:20px;flex-wrap:wrap;margin-top:14px;font-family:var(--mono);
+          font-size:12px;color:var(--muted)}
+  .legend b{color:var(--ink);font-weight:600}
+  /* tiles */
+  .tiles{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:26px}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 16px}
+  .tile .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .tile .v{font-family:var(--mono);font-size:26px;font-weight:600;margin-top:7px;letter-spacing:-.01em}
+  .tile .v small{font-size:12px;color:var(--muted);font-weight:400}
+  h2{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+     color:var(--muted);margin:0 0 12px;font-weight:600}
+  section.blk{margin-bottom:26px}
+  /* source cards */
+  .srcgrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+  .src{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 17px;
+       border-left:3px solid var(--c)}
+  .src .name{font-family:var(--mono);font-size:13px;font-weight:600;text-transform:uppercase;
+             letter-spacing:.06em;color:var(--c);display:flex;justify-content:space-between}
+  .src .big{font-family:var(--mono);font-size:30px;font-weight:600;margin:8px 0 2px}
+  .src .sub{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+  .mini{height:6px;border-radius:3px;background:var(--track);overflow:hidden;margin:12px 0 4px}
+  .mini>span{display:block;height:100%;background:var(--c);width:0;transition:width 1s ease}
+  /* tables */
+  .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px}
+  th,td{text-align:right;padding:9px 13px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--muted);font-weight:600;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase}
+  tr:last-child td{border-bottom:none}
+  .pill{display:inline-block;padding:1px 7px;border-radius:5px;font-size:11px}
+  footer{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:30px;line-height:1.6}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head>
-<body>
-  <h1>Agent Context Memory — 真實用量</h1>
-  <p class="sub">Claude 走 proxy、Codex 讀本機 log。數字為實際觀測的 token；金額僅為 API 定價換算，非帳單。</p>
-  <div id="cards" class="grid"></div>
-  <h2>來源對照 (Claude vs Codex)</h2>
-  <table id="sources"></table>
-  <h2>依模型</h2>
-  <table id="models"></table>
-  <h2>最近請求</h2>
-  <table id="events"></table>
+<body><div class="wrap">
+  <header>
+    <div class="brand"><span class="dot"></span>Agent Context Memory · Live Telemetry</div>
+    <div class="updated" id="updated"></div>
+  </header>
+
+  <div class="hero">
+    <div class="eyebrow">Cache cost savings · 快取為你省下的 input token 成本</div>
+    <div class="meter">
+      <div class="meter-fill" id="fill"></div>
+      <div class="meter-read">
+        <b id="savePct">–</b><span class="pct">%</span>
+        <span class="cap" id="heroCap"></span>
+      </div>
+    </div>
+    <div class="legend">
+      <span>served from cache <b id="crTok">–</b></span>
+      <span>cache hit <b id="hitPct">–</b></span>
+      <span>baseline input <b id="baseTok">–</b></span>
+    </div>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <section class="blk"><h2>Sources · Claude vs Codex</h2><div class="srcgrid" id="srcgrid"></div></section>
+  <section class="blk"><h2>By model</h2><div class="tablewrap"><table id="models"></table></div></section>
+  <section class="blk"><h2>Recent requests</h2><div class="tablewrap"><table id="events"></table></div></section>
+
+  <footer>
+    數字為實際觀測 token。百分比＝快取避免的 input 成本占比（fresh 1×, cache-write 1.25×, cache-read 0.1×）。<br>
+    金額為 Anthropic API 定價換算之參考值，非帳單；proxy 僅本機 loopback 自用。
+  </footer>
+</div>
 <script>
-const B = "/__acm";
-const fmt = n => (n||0).toLocaleString();
-const pct = r => ((r||0)*100).toFixed(1)+"%";
-const usd = n => "$"+(n||0).toFixed(2);
-async function j(u){ const r=await fetch(B+u); return r.json(); }
-function el(tag, html){ const e=document.createElement(tag); e.innerHTML=html; return e; }
-function card(k,v,sub){ return `<div class="card"><div class="k">${k}</div><div class="v">${v}${sub?` <small>${sub}</small>`:""}</div></div>`; }
+const B="/__acm";
+const cfmt=n=>{n=n||0;const a=Math.abs(n);
+  if(a>=1e9)return (n/1e9).toFixed(2)+"B";
+  if(a>=1e6)return (n/1e6).toFixed(1)+"M";
+  if(a>=1e3)return (n/1e3).toFixed(1)+"k";
+  return String(n);};
+const pct=r=>((r||0)*100).toFixed(1);
+const SRC={claude:"var(--claude)",codex:"var(--codex)"};
+const j=async u=>(await fetch(B+u)).json();
+const el=(t,h)=>{const e=document.createElement(t);e.innerHTML=h;return e;};
+
 async function load(){
-  const s = await j("/api/summary");
-  const o = s.overall;
-  document.getElementById("cards").innerHTML =
-    card("Requests", fmt(o.requests)) +
-    card("Total input", fmt(o.total_input_tokens), "tokens") +
-    card("Output", fmt(o.output_tokens), "tokens") +
-    card("Cache hit", pct(o.cache_hit_ratio)) +
-    card("Cache read", fmt(o.cache_read_tokens), "tokens") +
-    card("Illustrative saved", usd(o.illustrative_cache_savings_usd), "ref only");
+  const s=await j("/api/summary"), o=s.overall;
+  const sp=(o.cache_savings_pct||0)*100;
+  document.getElementById("savePct").textContent=sp.toFixed(1);
+  requestAnimationFrame(()=>{document.getElementById("fill").style.width=Math.max(2,sp).toFixed(1)+"%";});
+  document.getElementById("heroCap").innerHTML=
+    "每 100 個 input token 的成本<br>快取省下 ~"+sp.toFixed(0)+" 個";
+  document.getElementById("crTok").textContent=cfmt(o.cache_read_tokens);
+  document.getElementById("hitPct").textContent=pct(o.cache_hit_ratio)+"%";
+  document.getElementById("baseTok").textContent=cfmt(o.total_input_tokens);
 
-  const st = document.getElementById("sources");
-  st.innerHTML = "<tr><th>Source</th><th>Req</th><th>Input</th><th>Cache read</th><th>Output</th><th>Cache hit</th></tr>";
-  s.by_source.forEach(r=>{
-    const c = r.source==="codex" ? "var(--codex)" : "var(--claude)";
-    st.appendChild(el("tr",`<td><span class="tag" style="background:${c}"></span>${r.source}</td>`+
-      `<td>${fmt(r.requests)}</td><td>${fmt(r.input_tokens)}</td><td>${fmt(r.cache_read_tokens)}</td>`+
-      `<td>${fmt(r.output_tokens)}</td><td>${pct(r.cache_hit_ratio)}</td>`));
+  document.getElementById("tiles").innerHTML=[
+    ["Requests",cfmt(o.requests),""],
+    ["Input tokens",cfmt(o.total_input_tokens),"incl. cache"],
+    ["Output tokens",cfmt(o.output_tokens),""],
+    ["Illustrative saved","$"+((o.illustrative_cache_savings_usd||0)).toLocaleString(undefined,{maximumFractionDigits:0}),"ref, not a bill"],
+  ].map(([k,v,x])=>`<div class="tile"><div class="k">${k}</div><div class="v">${v}${x?` <small>${x}</small>`:""}</div></div>`).join("");
+
+  const sg=document.getElementById("srcgrid"); sg.innerHTML="";
+  (s.by_source||[]).forEach(r=>{
+    const c=SRC[r.source]||"var(--muted)", sv=((r.cache_savings_pct||0)*100);
+    const card=el("div",
+      `<div class="name"><span>${r.source}</span><span>${cfmt(r.requests)} req</span></div>
+       <div class="big">${sv.toFixed(1)}<span style="font-size:15px">%</span></div>
+       <div class="sub">cache cost saved</div>
+       <div class="mini"><span></span></div>
+       <div class="sub">cache hit ${pct(r.cache_hit_ratio)}% · input ${cfmt(r.total_input_tokens)}</div>`);
+    card.className="src"; card.style.setProperty("--c",c);
+    sg.appendChild(card);
+    requestAnimationFrame(()=>{card.querySelector(".mini>span").style.width=Math.max(2,sv).toFixed(1)+"%";});
   });
 
-  const models = await j("/api/models");
-  const mt = document.getElementById("models");
-  mt.innerHTML = "<tr><th>Model</th><th>Source</th><th>Req</th><th>Input</th><th>Cache read</th><th>Cache hit</th></tr>";
+  const models=await j("/api/models"), mt=document.getElementById("models");
+  mt.innerHTML="<tr><th>Model</th><th>Src</th><th>Req</th><th>Input</th><th>Cache read</th><th>Saved</th></tr>";
   models.slice(0,20).forEach(r=>{
-    mt.appendChild(el("tr",`<td>${r.model||"—"}</td><td>${r.source}</td><td>${fmt(r.requests)}</td>`+
-      `<td>${fmt(r.input_tokens)}</td><td>${fmt(r.cache_read_tokens)}</td><td>${pct(r.cache_hit_ratio)}</td>`));
+    const c=SRC[r.source]||"var(--muted)";
+    mt.appendChild(el("tr",
+      `<td>${r.model||"—"}</td>
+       <td><span class="pill" style="color:${c}">${r.source}</span></td>
+       <td>${cfmt(r.requests)}</td><td>${cfmt(r.input_tokens)}</td>
+       <td>${cfmt(r.cache_read_tokens)}</td><td>${((r.cache_savings_pct||0)*100).toFixed(1)}%</td>`));
   });
 
-  const ev = await j("/api/events?limit=50");
-  const et = document.getElementById("events");
-  et.innerHTML = "<tr><th>Time (UTC)</th><th>Source</th><th>Model</th><th>Input</th><th>Cache read</th><th>Output</th></tr>";
+  const ev=await j("/api/events?limit=50"), et=document.getElementById("events");
+  et.innerHTML="<tr><th>Time (UTC)</th><th>Src</th><th>Model</th><th>Input</th><th>Cache read</th><th>Output</th></tr>";
   ev.forEach(r=>{
-    et.appendChild(el("tr",`<td>${(r.ts_utc||"").replace('T',' ').slice(0,19)}</td><td>${r.source}</td>`+
-      `<td>${r.model||"—"}</td><td>${fmt(r.input_tokens)}</td><td>${fmt(r.cache_read_tokens)}</td><td>${fmt(r.output_tokens)}</td>`));
+    const c=SRC[r.source]||"var(--muted)";
+    et.appendChild(el("tr",
+      `<td>${(r.ts_utc||"").replace("T"," ").slice(0,19)}</td>
+       <td><span class="pill" style="color:${c}">${r.source}</span></td>
+       <td>${r.model||"—"}</td><td>${cfmt(r.input_tokens)}</td>
+       <td>${cfmt(r.cache_read_tokens)}</td><td>${cfmt(r.output_tokens)}</td>`));
   });
+
+  const d=new Date();
+  document.getElementById("updated").textContent="updated "+d.toTimeString().slice(0,8);
 }
-load().catch(e=>{ document.body.appendChild(el("p", "load error: "+e)); });
+load().catch(e=>{document.getElementById("heroCap").textContent="load error: "+e;});
+setInterval(()=>load().catch(()=>{}), 15000);
 </script>
 </body></html>"""
