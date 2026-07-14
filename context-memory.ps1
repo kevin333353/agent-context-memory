@@ -47,6 +47,7 @@ Commands:
   resume            Print a new-chat resume prompt
   compact-state     Add a history marker when state.yaml exceeds the token target
   single-session    Enable, inspect, or disable Claude single-session guard
+  proxy <sub>       Usage proxy + dashboard: start|stop|status|enable|disable
   benchmark         Run synthetic token-savings benchmark
   help              Show this help
 
@@ -209,6 +210,10 @@ function New-ClaudeHookDef {
     command = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     args = @(
       "-NoProfile",
+      "-NoLogo",
+      "-NonInteractive",
+      "-WindowStyle",
+      "Hidden",
       "-ExecutionPolicy",
       "Bypass",
       "-File",
@@ -1049,6 +1054,138 @@ Options:
 "@
 }
 
+function Get-ProxyPaths {
+  $usageDir = Join-Path $ToolRoot "usage"
+  New-Item -ItemType Directory -Force -Path $usageDir | Out-Null
+  return [pscustomobject]@{
+    Dir      = $usageDir
+    Pid      = Join-Path $usageDir "proxy.pid"
+    Port     = Join-Path $usageDir "proxy.port"
+    Log      = Join-Path $usageDir "proxy.log"
+    Db       = Join-Path $usageDir "usage.sqlite"
+    PrevBase = Join-Path $usageDir "anthropic-base-url.prev"
+  }
+}
+
+function Get-ProxyPort {
+  param($Paths)
+  if ($env:ACM_PROXY_PORT) { return [int]$env:ACM_PROXY_PORT }
+  if (Test-Path -LiteralPath $Paths.Port) {
+    $p = (Get-Content -LiteralPath $Paths.Port -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($p -match '^\d+$') { return [int]$p }
+  }
+  return 8788
+}
+
+function Test-ProxyRunning {
+  param($Paths)
+  if (-not (Test-Path -LiteralPath $Paths.Pid)) { return $null }
+  $procId = (Get-Content -LiteralPath $Paths.Pid -ErrorAction SilentlyContinue | Select-Object -First 1)
+  if ($procId -notmatch '^\d+$') { return $null }
+  $proc = Get-Process -Id ([int]$procId) -ErrorAction SilentlyContinue
+  if ($proc) { return [int]$procId }
+  return $null
+}
+
+function Invoke-ProxyCommand {
+  $paths = Get-ProxyPaths
+  $sub = if ($Target) { $Target.ToLowerInvariant() } else { "status" }
+  switch ($sub) {
+    "start" {
+      $existing = Test-ProxyRunning $paths
+      if ($existing) {
+        $port = Get-ProxyPort $paths
+        Write-Check "warn" "Proxy already running (PID $existing) on port $port"
+        Write-Output "Dashboard: http://127.0.0.1:$port/__acm/"
+        return
+      }
+      $python = Get-ContextMemoryPythonPath
+      if (-not $python) { Write-Check "fail" "Managed Python not found; run install first"; exit 1 }
+      $port = Get-ProxyPort $paths
+      $psi = New-Object System.Diagnostics.ProcessStartInfo
+      $psi.FileName = $python
+      $psi.Arguments = "-m usage --port $port --db `"$($paths.Db)`""
+      $psi.WorkingDirectory = $ToolRoot
+      $psi.UseShellExecute = $false
+      $psi.CreateNoWindow = $true
+      # Put <ToolRoot>\scripts on the path and import the inner `usage` package
+      # directly. This avoids a shadowing top-level `scripts` package that some
+      # Python distributions (e.g. Anaconda) ship in site-packages.
+      $psi.EnvironmentVariables["PYTHONPATH"] = (Join-Path $ToolRoot "scripts")
+      $psi.EnvironmentVariables["ACM_PROXY_LOG"] = $paths.Log
+      $proc = [System.Diagnostics.Process]::Start($psi)
+      Set-Content -LiteralPath $paths.Pid -Value $proc.Id -Encoding ASCII
+      Set-Content -LiteralPath $paths.Port -Value $port -Encoding ASCII
+      Write-Check "pass" "Proxy started (PID $($proc.Id)) on port $port"
+      Write-Output "Dashboard: http://127.0.0.1:$port/__acm/"
+      Write-Output "Enable Claude Code: context-memory proxy enable claude"
+    }
+    "stop" {
+      $procId = Test-ProxyRunning $paths
+      if (-not $procId) { Write-Check "warn" "Proxy is not running"; return }
+      Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $paths.Pid -ErrorAction SilentlyContinue
+      Write-Check "pass" "Proxy stopped (PID $procId)"
+    }
+    "status" {
+      $procId = Test-ProxyRunning $paths
+      $port = Get-ProxyPort $paths
+      if ($procId) { Write-Check "pass" "Proxy running (PID $procId) on port $port" }
+      else { Write-Check "info" "Proxy not running" }
+      Write-Output "Dashboard: http://127.0.0.1:$port/__acm/"
+      Write-Output "Database:  $($paths.Db)"
+      $base = [Environment]::GetEnvironmentVariable("ANTHROPIC_BASE_URL", "User")
+      Write-Output "ANTHROPIC_BASE_URL (User): $(if ($base) { $base } else { '<unset>' })"
+      $python = Get-ContextMemoryPythonPath
+      if ($python -and (Test-Path -LiteralPath $paths.Db)) {
+        $count = & $python -c "import sqlite3,sys; con=sqlite3.connect(sys.argv[1]); print(con.execute('select count(*) from usage_events').fetchone()[0])" "$($paths.Db)" 2>$null
+        if ($count) { Write-Output "Recorded usage events: $count" }
+      }
+    }
+    "enable" {
+      # target is 'claude' by convention; only Claude Code is proxied
+      $port = Get-ProxyPort $paths
+      $newBase = "http://127.0.0.1:$port"
+      $current = [Environment]::GetEnvironmentVariable("ANTHROPIC_BASE_URL", "User")
+      if ($current -ne $newBase) {
+        # Save prior value once, for reversible restore.
+        if (-not (Test-Path -LiteralPath $paths.PrevBase)) {
+          $prevVal = if ($current) { $current } else { "" }
+          Set-Content -LiteralPath $paths.PrevBase -Value $prevVal -Encoding UTF8
+        }
+      }
+      [Environment]::SetEnvironmentVariable("ANTHROPIC_BASE_URL", $newBase, "User")
+      Write-Check "pass" "ANTHROPIC_BASE_URL set to $newBase (User)"
+      Write-Output "Open a NEW terminal / restart Claude Code for it to take effect."
+    }
+    "disable" {
+      $port = Get-ProxyPort $paths
+      $managed = "http://127.0.0.1:$port"
+      $current = [Environment]::GetEnvironmentVariable("ANTHROPIC_BASE_URL", "User")
+      if ($current -and $current -ne $managed) {
+        Write-Check "warn" "ANTHROPIC_BASE_URL was changed after enable ($current); leaving it untouched."
+        return
+      }
+      $prev = ""
+      if (Test-Path -LiteralPath $paths.PrevBase) {
+        $prev = (Get-Content -LiteralPath $paths.PrevBase -Raw -ErrorAction SilentlyContinue).Trim()
+      }
+      if ($prev) {
+        [Environment]::SetEnvironmentVariable("ANTHROPIC_BASE_URL", $prev, "User")
+        Write-Check "pass" "Restored ANTHROPIC_BASE_URL to $prev"
+      } else {
+        [Environment]::SetEnvironmentVariable("ANTHROPIC_BASE_URL", $null, "User")
+        Write-Check "pass" "Unset ANTHROPIC_BASE_URL (User)"
+      }
+      Remove-Item -LiteralPath $paths.PrevBase -ErrorAction SilentlyContinue
+      Write-Output "Open a NEW terminal / restart Claude Code for it to take effect."
+    }
+    default {
+      Write-Output "Usage: context-memory proxy <start|stop|status|enable|disable>"
+    }
+  }
+}
+
 switch ($Command.ToLowerInvariant()) {
   "init" { Invoke-InitCommand }
   "install" { Invoke-InstallCommand }
@@ -1060,6 +1197,7 @@ switch ($Command.ToLowerInvariant()) {
   "resume" { Invoke-ResumeCommand }
   "compact-state" { Invoke-CompactStateCommand }
   "single-session" { Invoke-SingleSessionCommand }
+  "proxy" { Invoke-ProxyCommand }
   "benchmark" { Invoke-BenchmarkCommand }
   "version" { Invoke-VersionCommand }
   "help" { Invoke-ContextMemoryHelp }

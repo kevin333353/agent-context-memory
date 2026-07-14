@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.4.0 - 2026-07-14
+
+### Added
+
+- Real, observed usage measurement with a local dashboard (distinct from the
+  existing estimated benchmarks). A loopback proxy captures Claude Code token and
+  prompt-cache usage from live responses; a log tailer ingests Codex CLI usage
+  from `~/.codex` rollout logs. Both normalize into one global `usage.sqlite`.
+- `context-memory proxy start|stop|status|enable|disable` commands. `enable claude`
+  reversibly points `ANTHROPIC_BASE_URL` at the proxy; the dashboard is served at
+  `http://127.0.0.1:8788/__acm/`.
+- A self-contained dashboard (embedded HTML, no external requests) showing token
+  usage, cache-hit ratio, a Claude-vs-Codex comparison, per-model and per-request
+  detail, and an illustrative (non-billing) list-price savings figure.
+- Pure-standard-library implementation under `scripts/usage/`; no new runtime
+  dependencies, covered by the stdlib `unittest` suite.
+
+### Changed
+
+- The Claude Code hook definition now launches PowerShell with
+  `-WindowStyle Hidden -NonInteractive -NoLogo`, eliminating the console window
+  that flashed on every hook event (Codex was already unaffected).
+
+### Notes
+
+- Claude is measured via proxy because subscription mode still returns a full
+  `usage` block through `ANTHROPIC_BASE_URL`; Codex (ChatGPT subscription) cannot
+  be cleanly proxied, so its usage is read from local logs instead. The proxy is
+  loopback-only and intended for local self-use; any dollar figure is an
+  illustrative API-price conversion, not a bill.
+
 ## 0.3.0 - 2026-07-12
 
 ### Added

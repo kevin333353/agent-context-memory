@@ -43,20 +43,28 @@ Codex CLI ──(unmodified)──▶ ~/.codex logs  │  ◀── [ingest.code
                             [dashboard: embedded HTML + /api/* JSON]
 ```
 
-One Python application (`acm-proxy`) runs as a background process and contains five
-internally isolated modules:
+One Python application (`scripts/usage`, run as `python -m usage` with
+`<tool-root>/scripts` on the path) runs as a background process and contains
+internally isolated modules — **pure standard library, zero new dependencies**
+(the project's only dependency remains PyYAML). This keeps the offline/Windows
+install story intact and lets every module run under the existing stdlib
+`unittest` suite with no `pip install`.
 
-| Module | Responsibility | Key deps |
+| Module | Responsibility | Deps |
 |---|---|---|
-| `proxy` | Forward Claude traffic verbatim, tee SSE, parse Anthropic `usage` | FastAPI, httpx |
-| `ingest.codex` | Tail `~/.codex` session logs, parse OpenAI-shape usage, dedupe | stdlib |
-| `store` | SQLite schema, normalized writes, aggregate queries | sqlite3 |
-| `dashboard` | Serve embedded HTML page and `/api/*` JSON | FastAPI |
+| `store` | SQLite schema, normalized writes, aggregate queries (thread-safe) | sqlite3 |
+| `anthropic_usage` | Parse Anthropic streaming/non-streaming `usage` | stdlib |
+| `codex_ingest` | Tail `~/.codex` rollout logs, normalize, dedupe | stdlib |
+| `proxy` | Forward Claude traffic verbatim (`http.server` + `http.client`), tee SSE, parse usage | stdlib |
+| `dashboard` | Embedded HTML page + `/__acm/api/*` JSON | stdlib |
+| `pricing` | Illustrative list-price conversion (labeled non-billing) | stdlib |
+| `__main__` | Wire proxy + background Codex tailer; run | stdlib |
 | `cli` (PowerShell) | `proxy start/stop/status`, `enable/disable claude` | existing `context-memory.ps1` |
 
 The application uses the project's managed Python (`python-resolver.ps1` / managed
-`.venv`). New runtime dependencies (`fastapi`, `uvicorn`, `httpx`) are pinned and added to
-`requirements.txt`.
+`.venv`). It is launched with `PYTHONPATH=<tool-root>/scripts` and `-m usage` so a
+shadowing top-level `scripts` package (shipped by some distributions such as
+Anaconda) cannot mask the project modules.
 
 ## Phase 0 — Discovery and Verification Spike
 

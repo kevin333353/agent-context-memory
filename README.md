@@ -251,6 +251,35 @@ python "$env:USERPROFILE\.agent-context-memory\benchmarks\claude-code-usage-repo
 
 更完整的結果見 [docs/benchmark-results.md](docs/benchmark-results.md)。
 
+## 真實用量量測（Proxy + Dashboard）
+
+Benchmark 是離線估算。若要看**真實觀測**的 token 用量與 prompt cache 命中，可以啟用 usage proxy：
+
+```powershell
+context-memory proxy start
+context-memory proxy enable claude   # 把 ANTHROPIC_BASE_URL 指到本機 proxy（可逆）
+```
+
+之後開新 terminal 重啟 Claude Code，用量就會即時進 dashboard：
+
+```text
+http://127.0.0.1:8788/__acm/
+```
+
+- **Claude Code** 透過本機 loopback proxy 量測：proxy 把 `/v1/messages` 原樣轉發到 `api.anthropic.com`，同時從回應的 `usage` 讀出 `input_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens` / `output_tokens`。訂閱制帳號的回應一樣帶完整 `usage`。
+- **Codex CLI** 不走 proxy（ChatGPT 訂閱走內部後端、無法乾淨改導向），改讀本機 `~/.codex/sessions/**/rollout-*.jsonl` 的 `token_count` 事件。
+- 兩邊正規化後寫進全域 `usage.sqlite`（`%USERPROFILE%\.agent-context-memory\usage\`），只存 token 數與識別碼，不存任何 prompt/回應內容。
+
+其他指令：
+
+```powershell
+context-memory proxy status          # 執行狀態、port、DB、已記錄事件數
+context-memory proxy stop
+context-memory proxy disable claude  # 還原原本的 ANTHROPIC_BASE_URL
+```
+
+注意：proxy 只在本機 loopback、供自己觀測使用；訂閱制透過自架 proxy 使用 OAuth token 屬未明確背書的灰色地帶。dashboard 上的金額只是用 Anthropic API 定價換算的**參考值**，不是帳單。
+
 ## 專案結構
 
 ```text
@@ -258,6 +287,7 @@ adapters/                    Agent CLI output adapters
 benchmarks/                  Token savings 與 Claude transcript 報告
 docs/                        教學與 benchmark 文件
 scripts/                     SQLite journal 與 fill-table worker
+scripts/usage/               Usage proxy / Codex log 讀取 / dashboard（純 stdlib）
 skills/context-memory/       Codex skill 指令
 templates/.context-memory/   可提交的專案範本
 tests/                       Protocol smoke tests
@@ -321,6 +351,11 @@ context-memory validate -Cwd <repo-root>
 context-memory status -Cwd <repo-root>
 context-memory resume -Cwd <repo-root>
 context-memory benchmark
+context-memory proxy start
+context-memory proxy enable claude
+context-memory proxy status
+context-memory proxy disable claude
+context-memory proxy stop
 ```
 
 ## 一句話總結
