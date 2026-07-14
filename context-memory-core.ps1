@@ -367,9 +367,7 @@ function Write-ContextMemoryJournal($inputObj, [string]$memoryRoot, [string]$eve
   } | ConvertTo-Json -Depth 8 -Compress
 
   try {
-    $eventBytes = [System.Text.Encoding]::UTF8.GetBytes($journalEvent)
-    $eventB64 = [Convert]::ToBase64String($eventBytes)
-    $output = & $pythonPath $scriptPath record-and-dispatch --memory-root $memoryRoot --adapter $adapterName --tool-root $script:ContextMemoryCoreRoot --event-b64 $eventB64 2>&1 | Out-String
+    $output = $journalEvent | & $pythonPath $scriptPath record-and-dispatch --memory-root $memoryRoot --adapter $adapterName --tool-root $script:ContextMemoryCoreRoot --event-stdin 2>&1 | Out-String
     if ($LASTEXITCODE -ne 0) {
       Write-ContextMemoryDiagnostic $memoryRoot "journal/dispatch failed with exit code $LASTEXITCODE"
       return $false
