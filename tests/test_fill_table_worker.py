@@ -72,6 +72,25 @@ class FillTableWorkerTests(unittest.TestCase):
         self.assertEqual(Path(report["journal_path"]), self.db.resolve())
         self.assertEqual(len(report["events"]), 1)
 
+    def test_build_prompt_accepts_explicit_user_statements_as_evidence(self):
+        prompt = worker.build_prompt(
+            "schema_version: 1",
+            "schema_version: 1",
+            [
+                {
+                    "id": 1,
+                    "adapter": "claude-code",
+                    "event": "user_prompt_submit",
+                    "action": "inject",
+                    "prompt": "Architecture decision: use SQLite.",
+                }
+            ],
+        )
+
+        self.assertIn("user_prompt 是使用者對專案的明確陳述", prompt)
+        self.assertIn("不要要求這些額外證據才更新記憶", prompt)
+        self.assertIn("必須建立初始記憶", prompt)
+
     def test_invalid_routine_output_retries_then_uses_repair_model(self):
         calls = []
         outputs = iter(["not-json", "{bad", self.valid_model_json()])
@@ -185,7 +204,10 @@ class FillTableWorkerTests(unittest.TestCase):
         self.assertIn("no_change", output)
 
     def test_claude_subprocess_marks_worker_child(self):
+        executable = r"C:\npm\claude.cmd"
+
         def fake_run(command, **kwargs):
+            self.assertEqual(command[0], executable)
             self.assertEqual(kwargs["env"]["CONTEXT_MEMORY_WORKER_CHILD"], "1")
             return SimpleNamespace(
                 returncode=0,
@@ -193,7 +215,9 @@ class FillTableWorkerTests(unittest.TestCase):
                 stderr="",
             )
 
-        with patch.object(worker.subprocess, "run", side_effect=fake_run):
+        with patch.object(
+            worker, "resolve_executable", return_value=executable
+        ), patch.object(worker.subprocess, "run", side_effect=fake_run):
             output, _ = worker.run_claude(
                 "prompt", "haiku", 0.01, self.repo
             )
