@@ -220,6 +220,13 @@ try {
   Assert-True (Test-Path -LiteralPath (Join-Path $TempRoot ".context-memory\config.yaml")) "config file was not initialized"
   Assert-True (Test-Path -LiteralPath (Join-Path $TempRoot ".context-memory\events.sqlite")) "journal db was not written"
 
+  $cjkPrompt = -join @([char]0x4E2D, [char]0x6587, [char]0x6E2C, [char]0x8A66)
+  $cjkPayload = @{ cwd = $TempRoot; hook_event_name = "UserPromptSubmit"; prompt = $cjkPrompt } | ConvertTo-Json -Compress
+  $cjk = Invoke-Hook $cjkPayload @("-Adapter", "generic-json")
+  Assert-True ($cjk.ExitCode -eq 0) "CJK hook exited $($cjk.ExitCode): $($cjk.Stderr)"
+  $cjkPromptHex = & $managedPython -c "import sqlite3; c=sqlite3.connect(r'$TempRoot\.context-memory\events.sqlite'); print(c.execute('select hex(cast(prompt as blob)) from events order by id desc limit 1').fetchone()[0]); c.close()"
+  Assert-True ($cjkPromptHex.Trim() -eq "E4B8ADE69687E6B8ACE8A9A6") "CJK prompt was not journaled as UTF-8"
+
   $plain = Invoke-Hook $promptPayload @("-Adapter", "plain-text")
   Assert-True ($plain.ExitCode -eq 0) "plain-text exited $($plain.ExitCode): $($plain.Stderr)"
   Assert-True ($plain.Stdout.Contains("<CONTEXT_MEMORY_STATE")) "plain-text missing context"

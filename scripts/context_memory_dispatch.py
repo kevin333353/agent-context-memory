@@ -226,9 +226,17 @@ def main() -> int:
     memory_root = Path(args.memory_root)
     tool_root = Path(args.tool_root)
     if args.command == "record-and-dispatch":
+        # Redirected stdin inherits the Windows locale code page in Python even
+        # though the PowerShell hook writes UTF-8 bytes. Decode the wire format
+        # explicitly so CJK prompts do not become surrogate characters.
+        event_json = (
+            sys.stdin.buffer.read().decode("utf-8-sig")
+            if args.event_stdin
+            else None
+        )
         event = parse_event_payload(
             args.event_b64,
-            sys.stdin.read() if args.event_stdin else None,
+            event_json,
         )
         config = migrate_config_file(memory_root / "config.yaml")
         result = record_and_maybe_dispatch(

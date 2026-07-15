@@ -1,6 +1,7 @@
-import os
 import json
+import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -201,6 +202,39 @@ class ContextMemoryDispatchTests(unittest.TestCase):
         parsed = dispatch.parse_event_payload(None, json.dumps(event))
 
         self.assertEqual(parsed["prompt"], event["prompt"])
+
+    def test_cli_decodes_utf8_event_from_stdin(self):
+        self.require_dispatch()
+        event = self.event()
+        event["prompt"] = "\u4e2d\u6587\u6e2c\u8a66"
+        env = os.environ.copy()
+        env["CONTEXT_MEMORY_DISABLE_WORKER_DISPATCH"] = "1"
+
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(TOOL_ROOT / "scripts" / "context_memory_dispatch.py"),
+                "record-and-dispatch",
+                "--memory-root",
+                str(self.memory_root),
+                "--adapter",
+                "codex-cli",
+                "--tool-root",
+                str(TOOL_ROOT),
+                "--event-stdin",
+            ],
+            input=json.dumps(event, ensure_ascii=False).encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode("utf-8"))
+        stored = dispatch.journal.read_unprocessed_events(
+            self.memory_root / "events.sqlite", 1
+        )
+        self.assertEqual(stored[0]["prompt"], event["prompt"])
 
 
 if __name__ == "__main__":
