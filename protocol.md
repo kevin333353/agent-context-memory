@@ -118,7 +118,7 @@ validation failure or conflict:
 | Adapter | Routine | Repair / compact rebuild |
 |---|---|---|
 | `claude-code` | `haiku` | `sonnet` |
-| `codex-cli` | `gpt-5-nano` | `gpt-5-mini` |
+| `codex-cli` | `gpt-5.4-mini` | `gpt-5.4` |
 
 Hooks record redacted, bounded events to `.context-memory/events.sqlite`. Once
 the unprocessed event threshold is reached, they launch the managed fill-table

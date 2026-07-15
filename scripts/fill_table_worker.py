@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -149,6 +150,18 @@ def unwrap_claude_stdout(stdout: str) -> str:
     return stdout
 
 
+def resolve_executable(name: str, windows: bool | None = None) -> str:
+    is_windows = os.name == "nt" if windows is None else windows
+    if is_windows:
+        return (
+            shutil.which(f"{name}.cmd")
+            or shutil.which(f"{name}.exe")
+            or shutil.which(name)
+            or f"{name}.cmd"
+        )
+    return shutil.which(name) or name
+
+
 def run_claude(prompt: str, model: str, budget: float | None, cwd: Path) -> tuple[str, str]:
     cmd = [
         "claude",
@@ -184,7 +197,7 @@ def run_codex(
     with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".txt") as tmp:
         output_path = Path(tmp.name)
     cmd = [
-        "codex",
+        resolve_executable("codex"),
         "exec",
         "-m",
         model,

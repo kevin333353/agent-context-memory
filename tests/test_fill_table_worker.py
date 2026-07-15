@@ -84,7 +84,7 @@ class FillTableWorkerTests(unittest.TestCase):
             self.repo, "codex-cli", live=True, apply=True, invoke_model=invoke
         )
 
-        self.assertEqual(calls, ["gpt-5-nano", "gpt-5-nano", "gpt-5-mini"])
+        self.assertEqual(calls, ["gpt-5.4-mini", "gpt-5.4-mini", "gpt-5.4"])
         self.assertEqual(report["status"], "updated")
         self.assertEqual(journal.get_worker_state(self.db)["last_status"], "updated")
 
@@ -143,18 +143,31 @@ class FillTableWorkerTests(unittest.TestCase):
         ) as run_codex:
             worker.invoke_configured_model(
                 "codex-cli",
-                "gpt-5-nano",
+                "gpt-5.4-mini",
                 "prompt",
                 {"reasoning_effort": "low"},
                 self.repo,
             )
 
         run_codex.assert_called_once_with(
-            "prompt", "gpt-5-nano", self.repo, "low"
+            "prompt", "gpt-5.4-mini", self.repo, "low"
         )
 
+    def test_windows_executable_prefers_cmd_shim(self):
+        with patch.object(
+            worker.shutil,
+            "which",
+            side_effect=[r"C:\npm\codex.cmd"],
+        ):
+            executable = worker.resolve_executable("codex", windows=True)
+
+        self.assertEqual(executable, r"C:\npm\codex.cmd")
+
     def test_codex_subprocess_marks_worker_child(self):
+        executable = r"C:\npm\codex.cmd"
+
         def fake_run(command, **kwargs):
+            self.assertEqual(command[0], executable)
             output_path = Path(
                 command[command.index("--output-last-message") + 1]
             )
@@ -162,9 +175,11 @@ class FillTableWorkerTests(unittest.TestCase):
             self.assertEqual(kwargs["env"]["CONTEXT_MEMORY_WORKER_CHILD"], "1")
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-        with patch.object(worker.subprocess, "run", side_effect=fake_run):
+        with patch.object(
+            worker, "resolve_executable", return_value=executable
+        ), patch.object(worker.subprocess, "run", side_effect=fake_run):
             output, _ = worker.run_codex(
-                "prompt", "gpt-5-nano", self.repo, "low"
+                "prompt", "gpt-5.4-mini", self.repo, "low"
             )
 
         self.assertIn("no_change", output)

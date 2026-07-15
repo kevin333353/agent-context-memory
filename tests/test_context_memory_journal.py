@@ -1,6 +1,7 @@
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from scripts import context_memory_journal as journal
@@ -28,7 +29,7 @@ class ContextMemoryJournalTests(unittest.TestCase):
         }
 
     def fetch_event(self, event_id):
-        with sqlite3.connect(self.db) as con:
+        with closing(sqlite3.connect(self.db)) as con:
             con.row_factory = sqlite3.Row
             return dict(con.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone())
 
@@ -72,7 +73,7 @@ class ContextMemoryJournalTests(unittest.TestCase):
             for index in range(3)
         ]
 
-        with sqlite3.connect(self.db) as con:
+        with closing(sqlite3.connect(self.db)) as con:
             remaining = [row[0] for row in con.execute("SELECT id FROM events ORDER BY id")]
 
         self.assertEqual(remaining, ids)
@@ -85,7 +86,7 @@ class ContextMemoryJournalTests(unittest.TestCase):
         second = journal.append_event(self.db, self.event("two"), config)
         third = journal.append_event(self.db, self.event("three"), config)
 
-        with sqlite3.connect(self.db) as con:
+        with closing(sqlite3.connect(self.db)) as con:
             remaining = [row[0] for row in con.execute("SELECT id FROM events ORDER BY id")]
 
         self.assertEqual(remaining, [second, third])

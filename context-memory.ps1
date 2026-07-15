@@ -209,6 +209,10 @@ function New-ClaudeHookDef {
     command = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
     args = @(
       "-NoProfile",
+      "-NoLogo",
+      "-NonInteractive",
+      "-WindowStyle",
+      "Hidden",
       "-ExecutionPolicy",
       "Bypass",
       "-File",

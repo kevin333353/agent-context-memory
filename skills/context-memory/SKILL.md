@@ -34,7 +34,7 @@ The stable contract is `context-memory/v1`; individual agent CLIs are thin adapt
 4. The managed background worker updates `state.yaml` after the configured event threshold. Update it manually only when the user explicitly asks or when repairing a diagnosed worker failure.
 5. Keep stable interpretation rules above dynamic state. Put frequently changing details near the bottom to preserve prompt-cache prefixes.
 6. Do not paste large logs or full conversations into memory. Store summaries plus file paths.
-7. Use the configured fill-table cascade for background summarization: Claude Code routine `haiku`, repair `sonnet`; Codex routine `gpt-5-nano`, repair `gpt-5-mini`.
+7. Use the configured fill-table cascade for background summarization: Claude Code routine `haiku`, repair `sonnet`; Codex routine `gpt-5.4-mini`, repair `gpt-5.4`.
 
 ## Single-Session Discipline
 

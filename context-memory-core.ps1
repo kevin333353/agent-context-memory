@@ -314,8 +314,8 @@ fill_table:
       repair_model_note: "Use Sonnet only for invalid YAML, conflicts, compact rebuilds, or schema migration."
       max_budget_usd: 0.06
     codex-cli:
-      routine_model: "gpt-5-nano"
-      repair_model: "gpt-5-mini"
+      routine_model: "gpt-5.4-mini"
+      repair_model: "gpt-5.4"
       reasoning_effort: "low"
 "@ | Set-Content -LiteralPath $configPath -Encoding UTF8
   }
