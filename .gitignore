@@ -10,6 +10,9 @@
 __pycache__/
 *.pyc
 
+# usage proxy: runtime store + state (the package lives at scripts/usage/)
+/usage/
+
 # Logs and temp files
 *.log
 *.pid

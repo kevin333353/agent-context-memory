@@ -7,6 +7,7 @@ import argparse
 import base64
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -22,6 +23,7 @@ def default_state() -> dict:
         "compact_offset": 0,
         "post_compact_baseline_tokens": None,
         "last_observed_tokens": None,
+        "pre_compact_observed_tokens": None,
         "settings_ownership": {},
     }
 
@@ -150,12 +152,25 @@ def evaluate_guard(
         return _result("missing_usage", state, threshold=threshold, growth=growth)
 
     observed = int(latest["tokens"])
+    intervention = None
     if compact_offset > 0 and state.get("post_compact_baseline_tokens") is None:
         state["post_compact_baseline_tokens"] = observed
+        pre = state.get("pre_compact_observed_tokens")
+        # Emit a measured before/after pair exactly once, when the tool-forced
+        # compaction actually shrank the running context.
+        if pre is not None and int(pre) > observed:
+            intervention = {
+                "kind": "compact",
+                "before_tokens": int(pre),
+                "after_tokens": observed,
+                "compact_offset": compact_offset,
+            }
     state["last_observed_tokens"] = observed
     save_state(state_path, state)
 
     result = _result("below_threshold", state, threshold=threshold, growth=growth)
+    if intervention is not None:
+        result["intervention"] = intervention
     should_block = bool(config.get("block_on_threshold", True)) and observed >= int(
         result["effective_threshold"]
     )
@@ -166,10 +181,22 @@ def evaluate_guard(
 
 
 def mark_compact_boundary(transcript: Path, state_path: Path, event: str) -> dict:
-    state = load_state(state_path)
-    ownership = state.get("settings_ownership") or {}
+    prev = load_state(state_path)
+    ownership = prev.get("settings_ownership") or {}
+    # Carry the last observed context size across the reset so the first
+    # post-compact observation can measure the drop. A user-initiated /clear is
+    # not the tool saving anything, so it starts no intervention pair.
+    pre_observed = None
+    if str(event).lower() != "clear":
+        # Prefer a fresh observation; otherwise keep a value already carried by
+        # an earlier boundary (Claude Code fires PreCompact then PostCompact, so
+        # the second call sees last_observed already reset to None).
+        pre_observed = prev.get("last_observed_tokens")
+        if pre_observed is None:
+            pre_observed = prev.get("pre_compact_observed_tokens")
     state = default_state()
     state["settings_ownership"] = ownership
+    state["pre_compact_observed_tokens"] = pre_observed
     try:
         state["transcript"] = str(transcript.resolve())
         state["compact_offset"] = transcript.stat().st_size if transcript.is_file() else 0
@@ -178,6 +205,52 @@ def mark_compact_boundary(transcript: Path, state_path: Path, event: str) -> dic
         state["compact_offset"] = 0
     save_state(state_path, state)
     return state
+
+
+def resolve_usage_db_path() -> Path:
+    """The usage DB the proxy/dashboard read: ``<ToolRoot>/usage/usage.sqlite``.
+
+    Derived from this module's location (``<ToolRoot>/scripts/…``) so it matches
+    the CLI's proxy ``--db`` in every install layout — including a tool installed
+    into a repo directory instead of the home default, where the store's
+    home-based ``default_db_path()`` would point at a different, unread DB.
+    """
+    return Path(__file__).resolve().parent.parent / "usage" / "usage.sqlite"
+
+
+def record_intervention_to_store(
+    memory_root, source: str, transcript_path: str, intervention: dict, db_path=None
+) -> bool:
+    """Best-effort: persist a measured compaction to the global usage store.
+
+    Never raises — measurement must never break the guard. Deduped on
+    ``transcript_path`` + ``compact_offset`` so a re-run of the same prompt
+    records the same compaction only once. Returns True only when a new row was
+    inserted.
+    """
+    try:
+        try:
+            from usage.store import (  # running as a script: scripts/ on sys.path
+                UsageStore, UsageIntervention,
+            )
+        except ImportError:
+            from scripts.usage.store import (  # imported as scripts.usage
+                UsageStore, UsageIntervention,
+            )
+        offset = intervention.get("compact_offset")
+        rec = UsageIntervention(
+            ts_utc=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            source=source,
+            kind=str(intervention.get("kind") or "compact"),
+            memory_root=str(memory_root),
+            before_tokens=int(intervention["before_tokens"]),
+            after_tokens=int(intervention["after_tokens"]),
+            dedupe_key=f"compact:{transcript_path}:{offset}",
+        )
+        with UsageStore(db_path or resolve_usage_db_path()) as store:
+            return store.record_intervention(rec)
+    except Exception:
+        return False
 
 
 def handle_hook_event(memory_root: Path, event: dict) -> dict:
@@ -197,12 +270,21 @@ def handle_hook_event(memory_root: Path, event: dict) -> dict:
         return {"enabled": False, "should_block": False, "reason": "disabled"}
 
     if framework_event == "UserPromptSubmit":
-        return evaluate_guard(
+        result = evaluate_guard(
             transcript,
             state_path,
             guard_config,
             str(event.get("prompt") or ""),
         )
+        intervention = result.get("intervention")
+        if intervention:
+            transcript_key = (
+                str(transcript.resolve()) if transcript.is_file() else str(transcript)
+            )
+            record_intervention_to_store(
+                memory_root, "claude", transcript_key, intervention
+            )
+        return result
     if framework_event in {"PreCompact", "PostCompact"}:
         state = mark_compact_boundary(transcript, state_path, framework_event)
         return {
