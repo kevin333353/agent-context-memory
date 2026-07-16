@@ -329,6 +329,12 @@ context-memory resume -Cwd <repo-root>
 context-memory benchmark
 ```
 
+## 授權
+
+Copyright (c) 2026 kevin333353。
+
+本專案以 [GNU Affero General Public License v3.0 only](LICENSE)（SPDX：`AGPL-3.0-only`）授權。若你修改本軟體並讓使用者透過網路與其互動，必須依 AGPL v3 第 13 節向這些使用者提供對應版本的完整原始碼。完整條款與免責聲明請見 [LICENSE](LICENSE)。
+
 ## 一句話總結
 
 `context-memory/v1` 是 agent session state management：把長任務上下文拆成「穩定規則、動態記憶、大型 artifact」，讓 agent 讀正確狀態，而不是每輪重放完整聊天歷史。

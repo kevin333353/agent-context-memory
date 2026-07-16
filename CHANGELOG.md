@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- The repository is now licensed under `AGPL-3.0-only`, with the canonical
+  GNU Affero General Public License v3 text in the root `LICENSE` file and a
+  Traditional Chinese license notice in the README.
+
 ## 0.3.0 - 2026-07-12
 
 ### Added
